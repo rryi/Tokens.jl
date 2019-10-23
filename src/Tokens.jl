@@ -1,14 +1,105 @@
 module Tokens
 
+"""
+code unit for tokens
+"""
 const CU = UInt8 # currently, only support bytes as code units
 
 # abstract type AbstractToken{C} where {C<:Integer} <: AbstractString
+
+"""
+A categorized string, supertype of all token types in this module.
+
+In addition to the AbstractString API, an AbstractToken has a
+[`TokenCategory`](@ref) and supports dynamic encoding in Utf8
+or ISO-8859-1 (also called Latin1).
+
+This module supplies very memory efficient implementations
+for very short tokens with [`TinyToken`](@ref),
+field String wFlyweight string with an associated token category.
+
+This string data type directly stores very short strings with a length
+of up to 7 code units. It supports the AbstractString API and can be
+used as a memory efficient substitute for String instances, avoiding
+any pointer overhead.
+
+In addition to its AbstractString API,
+
+Together wit a code unit buffer, it can hold strings of a length up to
+2**24.
+It can also hold longer strings, but then, a buffer must be supplied
+which holds all code units. The flyweight value encodes an offset and
+a length, in this case.
+"""
 abstract type AbstractToken <: AbstractString
 end
 
-"""
-Flyweight string with an associated token category (0..7).
 
+
+"""
+Predefined category semantics.
+
+The category value range is 0..15.
+
+Category 0..7 use Utf8 encoding, enum names are prefixed with "U".
+Category 8..15 use ISO-8859-1 encoding (also called Latin1), prefixed with "I"
+
+"""
+@enum TokenCategory ::UInt8 begin
+    #"Some comment"
+    TOKEN_BLOCK = 0
+    LCAT_STRING = 1
+    LCAT_CHARS = 2
+    LCAT_COMMENT = 3
+    LCAT_IDENT = 4
+    LCAT_WHITE
+    LCAT_NUMBER = 6
+    LCAT_SYMBOL = 7
+end
+
+
+"""
+Flyweight string with an associated token category.
+
+This string data type directly stores very short strings with a length
+of up to 7 code units. It supports the AbstractString API and can be
+used as a memory efficient substitute for String instances, avoiding
+any pointer overhead.
+
+In addition to its AbstractString API,
+
+Together wit a code unit buffer, it can hold strings of a length up to
+2**24.
+It can also hold longer strings, but then, a buffer must be supplied
+which holds all code units. The flyweight value encodes an offset and
+a length, in this case.
+
+
+
+# inplementation details
+
+Memory layout is 8 bytes stored as an Int64.
+Most significant byte stores type, category, encoding and length.
+Next significant byte is the 1st code unit or 0 (length 0).
+...
+Last significant byte is 7th  code unit or 0 (length <7).
+
+The encoding of the most significant byte is:
+bit7: type flag.
+bit7=0: this is a valid TinyToken with 0..7 code units
+bit7=1: this is a (category,length,offset) tuple,
+        only valid with reference to a buffer holding
+        the CU data starting at offset
+
+bit6: encoding flag
+bit6=0: encoding is Latin1 (1 byte per character, UTF codes 1..255)
+bit6=1: encoding is UTF8 (1..4 bytes per character)
+
+bit345: category bitfield, values 0..7
+bit012: length bitfield, values 0..7.
+        !!must be 0 if bit7=1!!
+
+offsetis a
 interpreted as an Int64 in little endian format, the
 following bit fields are encoded:
 
@@ -37,19 +128,17 @@ byte0
 """
 primitive type TinyToken <: AbstractToken 64 end
 
-const maxTinySize = 7; # maximal size of a direct string in TinyToken
+const maxTinySize = 7 # maximal size of a direct string in TinyToken
 
-const isUtf8 :: UInt8 = 8;
-
-mutable struct Token {
+mutable struct Token
     tiny :: TinyToken # current value, offset referencing buffer
     buffer :: Vector{CU} # memory with token text data.
     # TODO use C String ptr and limit index
     offset :: UInt32 # value to add to 1 to get index of 1st CU in buffer
     shared :: UInt32 #last index in buffer shared with other tokens
-} end
+end
 
-
+#=
 function TinyToken(s::String, category::UInt8=0)
     sz = sizeof(s)
     # try to encode in 7 bytes. tinytoken
@@ -101,5 +190,6 @@ Base.collect(s::TinyToken) = getindex.(s, 1:lastindex(s))
 ==(s::TinyToken, b::String) = begin
     String(s)  == b
 end
+=#
 
 end # module
