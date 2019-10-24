@@ -46,15 +46,22 @@ Category 8..15 use ISO-8859-1 encoding (also called Latin1), prefixed with "I"
 
 """
 @enum TokenCategory ::UInt8 begin
-    #"Some comment"
-    TOKEN_BLOCK = 0
-    LCAT_STRING = 1
-    LCAT_CHARS = 2
-    LCAT_COMMENT = 3
-    LCAT_IDENT = 4
-    LCAT_WHITE
-    LCAT_NUMBER = 6
-    LCAT_SYMBOL = 7
+    U_BLOCK = 0   # default: some Utf8 string, maybe empty
+    U_STRING = 1  # delimited token, delimiter removed
+    U_CHAR = 2    # delimited token, delimiter removed
+    U_COMMENT = 3 # delimited token, delimiter removed
+    U_IDENT = 4   # identifier
+    U_WHITE = 5   # whitespace
+    U_NUMBER = 6  # decimal and EXP format
+    U_SYMBOL = 7  #
+    I_BLOCK = 8   #
+    I_STRING = 9  #
+    I_CHAR = 10   #
+    I_COMMENT = 11#
+    I_IDENT = 12  #
+    I_EOL = 13    # end-of-line marker
+    I_NUMBER = 14 # integer
+    I_SYMBOL = 15 #
 end
 
 
