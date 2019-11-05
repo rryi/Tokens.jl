@@ -3,6 +3,9 @@ uuid = "bee08b60-e23d-11e9-3bd0-1baccf3efd5c"
 authors = ["Robert Rudolph"]
 version = "0.1.0"
 
+[deps]
+Try = "a25c14f0-ffe8-11e9-3388-b5d4b4d504ad"
+
 [compat]
 julia = "1"
 

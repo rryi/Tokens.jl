@@ -25,4 +25,24 @@ function tryy(size::Int, pos::Int)
     @code_native read(ts,pos)
 end
 
+
 tryy(100,7)
+
+
+struct TinyToken
+    bits::Int64
+
+    TinyToken(i::Any) = TinyToken(0,string(i))
+    function TinyToken(cat::Int,s::AbstractString)
+        println("calling SE inner")
+        new(cat<<56)
+    end
+end
+
+tryit = TinyToken(1,"")
+dump(tryit)
+
+try2 = TinyToken(2)
+dump(try2)
+
+try2 = TinyToken(3)
