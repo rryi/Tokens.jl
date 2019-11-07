@@ -6,28 +6,27 @@
 A categorized string, supertype of all token types in this module.
 
 In addition to the AbstractString API, an AbstractToken has a
-[`TokenCategory`](@ref) which roughly classifies its content.
+category which roughly classifies its content.
 It is accessed by [`category`](@ref)(t::AbstractToken).
+Its meaning is context dependent. See  [`Lexer`](@ref)
+for a concrete example.
 
 This module supplies a very memory efficient implementation
 for very short tokens with [`TinyToken`](@ref), a
 flyweight string plus category in 8 bytes. It can act as a
 memory efficient substitute for short String instances, avoiding
-any pointer overhead.
+any allocation and indirect (pointer) access. Data locality is
+improved, gaining speed advantages by better CPU cache use.
 
-TinyToken can also store larger strings, by means of an additional
-code unit buffer. This is implemented by [`Token`](@ref), which can
-handle strings of up to 2^27-1 code units. Token is quite similar to
-[`SubString`](@ref), 
+TinyToken can also store larger strings, up to 2^27-1 code units, if an
+additional code unit buffer is supplied. Tokens can share the same buffer:
+storing many TinyToken but only one buffer reduces memory needs.
+See [`TokenVector`](@ref) as an example.
 
-
-In addition to its AbstractString API,
-
-Together wit a code unit buffer, it can hold strings of a length up to
-2**24.
-It can also hold longer strings, but then, a buffer must be supplied
-which holds all code units. The flyweight value encodes an offset and
-a length, in this case.
+For convenience,  [`Token`](@ref) bundles a TinyToken with a buffer.
+Token is quite similar to [`SubString`](@ref), but can operate on short
+strings without buffer access, and reduces maximal length in favor of
+a category field.
 """
 abstract type AbstractToken <: AbstractString
 end
@@ -66,29 +65,8 @@ Some token categories imply that only ASCII characters are used. In
 these cases Utf8 and ISO-8859-1 encodings are identical, and the
 encoding bit is used to specify two different but similar token
 categories. This holds for U_WHITE and I_EOL, and U_NUMBER and I_INTEGER.
+ e1=1 e2=2
 
-"""
-@enum TokenCategory ::UInt8 begin
-    T_STRING = 0   # default: some Utf8 string, maybe empty
-    T_SPECIAL = 1  # special character (not white,letter, digit, symbol)
-
-    T_WHITE = 1  # whitespace, might contain codes >127
-    # delimited token, can contain escapes
-    T_CHAR = 2    # delimited token, delimiter removed
-    T_COMMENT = 3 # delimited token, delimiter removed
-    T_IDENT = 4   # identifier in UTF8
-    U_WHITE = 5   # whitespace, might contain codes >127
-    T_FLOAT = 6  # decimal and EXP format, might contain codes >127
-    T_SYMBOL = 7  #
-    I_STRING = 8   # some string, ISO-8851-1 encoded
-    I_ESCAPED = 9  #
-    I_CHAR = 10   #
-    I_COMMENT = 11#
-    I_IDENT = 12  # identifier
-    T_EOL = 13    # end-of-line marker
-    T_INT = 14# integer, all codes <128
-    I_SYMBOL = 15 #
-end
 
 #########################################################
 ################# AbstractToken API #####################
