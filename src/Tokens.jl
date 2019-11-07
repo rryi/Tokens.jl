@@ -4,7 +4,7 @@ include("base.jl")
 include("tinytoken.jl")
 export AbstractToken, TinyToken
 include("token.jl")
-export Token, Mutabletoken
+export Token, MutableToken
 #using TreeOnVectors
 include("tokenvector.jl")
 export TokenVector, TokenTree

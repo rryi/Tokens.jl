@@ -46,3 +46,13 @@ try2 = TinyToken(2)
 dump(try2)
 
 try2 = TinyToken(3)
+
+
+
+@enum en ::UInt8 e1 e2 e3 e4 e5
+
+f1(i::Int) = i+7
+
+f1(e::en) = Int(e)+7
+
+f1(i::UInt8) = i+7
