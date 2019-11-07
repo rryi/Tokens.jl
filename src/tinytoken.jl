@@ -20,6 +20,20 @@ case, as an offset (32bit) and a length (27bit).
 
 See [`Token`](@ref) and [`MutableToken`](@ref) for an implementation.
 
+# warning on @inbounds usage
+
+Methods that have a TinyToken parameter, need access to its code units,
+but have no associated code unit buffer as a parameter, will check if
+code units are stored as part of the supplied token. If not, they will
+ throw a BoundsError.
+
+This check is annotated with @boundscheck, so it is probably skipped
+if the method is called in an @inbounds block.
+
+Code annotated with @inbounds assures not only that all used indices are in
+bounds. It additionally assures that all code units are directly stored
+in the TinyToken instance for all method calls with a TinyToken parameter
+which is not accomplished by a code unit buffer parameter.
 
 # implementation details
 
@@ -78,8 +92,9 @@ struct TinyToken <: AbstractToken
     """
     default constructor
     """
-    function TinyToken(cat::TokenCategory, s::String, first::Int, size::Int)
-
+    function TinyToken(cat::UInt8, s::String, first::Int, size::Int)
+        @boundscheck checkbounds 0 < first && first+size <= ncodeunits(s) ||
+        @boundscheck size < 8 || throw BoundsError("Size too large for TinyToken string constructor",size)
         new(bits)
     end
 
@@ -118,11 +133,45 @@ function Base.ncodeunits(t::TinyToken)
 end
 
 
-isiso(t::TinyToken) = t.bits&(1<<62) > 0
+function Base.cmp(a::TinyToken, b::TinyToken)
+    @checkbounds checktiny(a)
+    @checkbounds checktiny(b)
+    # both tiny: compare all code units in one step
+    (a.bits& 2^56-1) < (b.bits& 2^56-1) && return -1
+    (a.bits& 2^56-1) > (b.bits& 2^56-1) && return 1
+    0
+end
 
 
-category(t::TinyToken) = TokenCategory((t.bits>>59)&15)
 
+category(t::TinyToken) = UInt8((t.bits>>59)&15)
+
+
+
+
+"throw an error if token references some buffer"
+function checktiny(t::TinyToken)
+    t.bits>=0 || throw(ErrorException("token references unknown buffer: &t"))
+end
+
+
+Base.show(io::IO, t::TinyToken)
+    print(io,'^',category(t))
+    if t.bits>=0
+        Base.print_quoted(io, t)
+    else
+        print(io,"$[ofs=",offset(t),",n=",ncodeunits(t),']')
+    end
+end
+
+
+"bitmask to check if any inline code unit is not ascii"
+const nonasciibits :: Int64 = reinterpret(Int64,0x10000000100000001000000010000000100000001000000010000000)
+
+function Base.isascii(t::TinyToken)
+    @boundscheck checktiny(t)
+    t.bits & nonasciibits == 0
+end
 
 @propagate_inbounds function Base.codeunit(t::TinyToken, i::Integer)
     @boundscheck 0 < i <= ncodeunits(t) || boundserr(t,i)

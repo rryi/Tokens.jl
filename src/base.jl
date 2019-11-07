@@ -31,54 +31,14 @@ a category field.
 abstract type AbstractToken <: AbstractString
 end
 
-"""
-Predefined category semantics for tokens.
-
-The category value range is 0..15.
-
-Its meaning depends on its usage context. This enumeration labels
-the usage by [`SimpleParser`](@ref).
-
-
- 0. T_STRING
-    Default category for "some string" without specific lexical meaning.
-    Lexer returns a token of this category if text is skipped until
-    an end marker is found.
- 1. T_SPECIAL
-    A token representing a special character. There are Unicode special
-    characters which have a specific treatment by Lexer, and result in other
-    token categories. This category is for "all the rest" of special
-    characters.
-
- 8. T_SYMBOL
-
-    having no specific meaning
-    to the lexer. Not all Unicode special
-    characters are reported
-some string    some string.
-1.
-
-Category 0..7 use Utf8 encoding, enum names are prefixed with "U".
-Category 8..15 use ISO-8859-1 encoding (also called Latin1), prefixed with "I"
-
-Some token categories imply that only ASCII characters are used. In
-these cases Utf8 and ISO-8859-1 encodings are identical, and the
-encoding bit is used to specify two different but similar token
-categories. This holds for U_WHITE and I_EOL, and U_NUMBER and I_INTEGER.
- e1=1 e2=2
-
 
 #########################################################
 ################# AbstractToken API #####################
 #########################################################
 
 
-"parametric type to allow for dispatch on preferred encoding"
-struct AsIso{bool}
-end
-
 """
-#offset(t::AbstractToken)
+    offset(t::AbstractToken)
 
 number of code units in the buffer associated with an token
 before the first code unit belonging to the token.
@@ -90,17 +50,27 @@ checks are performed.
 """
 function offset end
 
-"""
-#category(t::AbstractToken) :: TokenCategory
-
-Current category of given token, see  [`TokenCategory`](@ref).
 
 """
-function category :: TokenCategory end
+    subtoken(t::AbstractToken, first::Int, last::Int)
+
+Like SubString with same parameters, but returns
+Creates a new token of same type with the same category,
+and content SubString(t,first,last)
+
+"""
+function subtoken end
 
 
-#ensure index is an Int. does that work??!
-Base.thisind(t::AbstractToken, i::Integer) = thisind(t,Int(i))
+"""
+    category(t::AbstractToken) :: TokenCategory
+
+Current category of given token. A value in 0:15.
+Meaning depends on context, see eg [`Lexer`](@ref.
+"""
+function category end
+
+#= try with default implementatio  using isvalid ...
 
 function Base.thisind(t::AbstractToken, i::Int)
     if i<=0
@@ -112,22 +82,22 @@ function Base.thisind(t::AbstractToken, i::Int)
             @boundscheck i==lenp1 || boundserr(t,i)
             return i
         end
-        # now we have a normal case: i is valid index, calculate
-        isiso(t) && return i # the fast case.
-        # poor boy ... we must really find the index. copy/paste from strings.jl
-        @inbounds b = codeunit(s, i)
+        # now we have a normal case: i is inbound index
+        # copy/paste from strings.jl
+        @inbounds b = codeunit(t, i)
         (b & 0xc0 == 0x80) & (i-1 > 0) || return i
-        @inbounds b = codeunit(s, i-1)
+        @inbounds b = codeunit(t, i-1)
         between(b, 0b11000000, 0b11110111) && return i-1
         (b & 0xc0 == 0x80) & (i-2 > 0) || return i
-        @inbounds b = codeunit(s, i-2)
+        @inbounds b = codeunit(t, i-2)
         between(b, 0b11100000, 0b11110111) && return i-2
         (b & 0xc0 == 0x80) & (i-3 > 0) || return i
-        @inbounds b = codeunit(s, i-3)
+        @inbounds b = codeunit(t, i-3)
         between(b, 0b11110000, 0b11110111) && return i-3
         return i
     end
 end
+=#
 
 #########################################################
 #### API implementations which need no specialization ###
@@ -137,17 +107,54 @@ Base.codeunit(t::AbstractToken) = UInt8
 
 Base.sizeof(t::AbstractToken) = ncodeunits(t)
 
-#TODO more base functions
-function cmp(a::String, b::String)
+# simplified - true does not grant getindex returns a valid unicode
+Base.isvalid(t::AbstractToken, i::Int) = codeunit(t, i) & 0xc0 != 0x80
+
+
+
+"generic comparison by code units"
+function cmp_codeunits(a::AbstractToken, b::AbstractToken)
     al, bl = sizeof(a), sizeof(b)
-    c = ccall(:memcmp, Int32, (Ptr{UInt8}, Ptr{UInt8}, UInt),
-              a, b, min(al,bl))
-    return c < 0 ? -1 : c > 0 ? +1 : cmp(al,bl)
+    ml = min(al, bl)
+    i = 1
+    while i<=ml
+        ai = codeunit(a,i)
+        bi = codeunit(b,i)
+        ai < bi && return -1
+        ai > bi && return 1
+        i += 1
+    end
+    al < bl && return -1
+    al > bl && return 1
+    0
 end
 
-function ==(a::String, b::String)
-    al = sizeof(a)
-    al == sizeof(b) && 0 == ccall(:memcmp, Int32, (Ptr{UInt8}, Ptr{UInt8}, UInt), a, b, al)
+Base.cmp(a::AbstractToken, b::AbstractToken) = cmp_codeunits(a,b)
+
+#= use default
+function Base.==(a::AbstractToken, b::AbstractToken)
+    cmp_codeunits(a,b) == 0
+end
+=#
+
+
+function Base.show(io::IO,t::AbstractToken)
+    print(io,'^',category(t))
+    tshort = t
+    if ncodeunits(t)>30
+        tshort = subtoken(t,1,30) * "..."
+    end
+    Base.print_quoted(io, tshort)
+end
+
+
+function Base.write(io::IO, t::AbstractToken)
+    i = 1
+    n = ncodeunits(t)
+    while (i<=n)
+        write(io,codeunit(t,i))
+        i += 1
+    end
 end
 
 
@@ -159,6 +166,7 @@ end
 
 "helper function: bounds check failure"
 boundserr(t,i) = throw(BoundsError(t,i))
+
 
 "an empty string buffer"
 const empty::String = ""
