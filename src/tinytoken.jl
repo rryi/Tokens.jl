@@ -1,6 +1,13 @@
 # TinyToken type and associated methods
 
-const maxTinySize = 7 # maximal size of a direct string in TinyToken
+"maximal count of code units directly encoded in a TinyToken"
+const MAX_TINY_SIZE = 7
+
+"bitmask to check if any inline code unit is not ascii"
+const NONASCIITEST :: UInt64 = 0x10000000100000001000000010000000100000001000000010000000
+
+"bitmask to restrict to all code units"
+const ALL_CODE_UNITS :: UInt64 = (UInt64(1)<<56)-1
 
 """
 Flyweight string with an associated token category.
@@ -20,6 +27,20 @@ case, as an offset (32bit) and a length (27bit).
 
 See [`Token`](@ref) and [`MutableToken`](@ref) for an implementation.
 
+# warning on @inbounds usage
+
+Methods that have a TinyToken parameter, need access to its code units,
+but have no associated code unit buffer as a parameter, will check if
+code units are stored as part of the supplied token. If not, they will
+ throw a BoundsError.
+
+This check is annotated with @boundscheck, so it is probably skipped
+if the method is called in an @inbounds block.
+
+Code annotated with @inbounds assures not only that all used indices are in
+bounds. It additionally assures that all code units are directly stored
+in the TinyToken instance for all method calls with a TinyToken parameter
+which is not accomplished by a code unit buffer parameter.
 
 # implementation details
 
@@ -73,13 +94,19 @@ If tiny flag is set and a method does not know which
 buffer is referenced, it must raise an exception.
 """
 struct TinyToken <: AbstractToken
-    bits::Int64
+    bits::UInt64
 
     """
     default constructor
     """
-    function TinyToken(cat::TokenCategory, s::String, first::Int, size::Int)
-
+    function TinyToken(cat::UInt8, s::String, first::Int, last::Int)
+        @boundscheck checkcategory(cat)
+        if first >= last
+            return new(UInt64(cat)<<59) # empty string
+        end
+        @boundscheck checkbounds(s,first,last)
+        size = last-first
+        @boundscheck size < 8 || throw BoundsError("Size too large for TinyToken string constructor",size)
         new(bits)
     end
 
@@ -87,7 +114,8 @@ struct TinyToken <: AbstractToken
     function TinyToken(c::Char)
         bits ::UInt64 =
           (Base.codelen(c)) << 56) |
-          reinterpret(UInt32, c) << 24
+          (1 <<62) |
+          Int64(reinterpret(UInt32, c)) << 24
        new(bits)
    end
 
@@ -110,6 +138,8 @@ character sequence of at most 7 code units
 macro t_str(s) = TinyToken(s)
 
 
+
+
 function offset(t::TinyToken)
     mask = (t.bits>>63) & (2^32-1) # 0 for direct CU, 0xffffffff else
     convert(UInt32,t.bits & mask)
@@ -128,11 +158,59 @@ function Base.ncodeunits(t::TinyToken)
 end
 
 
-isiso(t::TinyToken) = t.bits&(1<<62) > 0
+function Base.cmp(a::TinyToken, b::TinyToken)
+    @checkbounds checktiny(a); checktiny(b)
+    # both tiny: compare all code units in one step
+    (a.bits& 2^56-1) < (b.bits& (2^56-1)) && return -1
+    (a.bits& 2^56-1) > (b.bits& (2^56-1)) && return 1
+    0
+end
 
 
-category(t::TinyToken) = TokenCategory((t.bits>>59)&15)
 
+category(t::TinyToken) = UInt8((t.bits>>59)&15)
+
+
+
+
+"throw an error if token references some buffer"
+function checktiny(t::TinyToken)
+    @boundscheck t.bits>=0 || throw(ErrorException("token references unknown buffer: &t"))
+end
+
+"throw an error if token references some buffer"
+function checkcategory(cat:UInt8)
+    @boundscheck cat <= 15 || throw(ErrorException("token category too large (max 15): &cat"))
+end
+
+function subtoken(t::T<:AbstractToken, first::Int, last::Int) = T(t,first,last)
+    @#boundscheck checktiny(t)
+    Int64 ret = t.bits
+
+    TinyToken ret = t
+    n = ncodeunits(t)
+    if (last<n)
+
+    end
+
+end
+
+
+Base.show(io::IO, t::TinyToken)
+    print(io,'^',category(t))
+    if t.bits>=0
+        Base.print_quoted(io, t)
+    else
+        print(io,"$[ofs=",offset(t),",n=",ncodeunits(t),']')
+    end
+end
+
+
+
+function Base.isascii(t::TinyToken)
+    @boundscheck checktiny(t)
+    t.bits & nonasciibits == 0
+end
 
 @propagate_inbounds function Base.codeunit(t::TinyToken, i::Integer)
     @boundscheck 0 < i <= ncodeunits(t) || boundserr(t,i)

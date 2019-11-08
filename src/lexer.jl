@@ -2,101 +2,61 @@
 
 #using BitFlags
 
-################ category constants for lexer #####################
 
-
-"Default category: a string without defined syntactic meaning"
-const L_STRING :: UInt8 = 0
-
-"whitespace sequence"
-const L_WHITE :: UInt8 = 1
-
-
-"Special character like % ! but no recognized symbol or escape character"
-const L_SPECIAL :: UInt8 = 2
-
-"string enclosed in quotes"
-const L_QUOTED :: UInt8 = 3
-
-"Identifier, usually a letter/digit sequence"
-const L_IDENT :: UInt8 = 4
-
-"A number with a decimal separator and/or decimal exponent"
-const L_FLOAT :: UInt8 = 5
-
-"all characters up to but excluding a termination sequence"
-const L_SEQ1 :: UInt8 = 6
-
-"all characters up to but excluding a termination sequence"
-const L_SEQ2 :: UInt8 = 7
-
-"A comment, including termination sequences"
-const L_COMMENT :: UInt8 = 8
-
-"End of line sequence, 1 or 2 characters"
-const L_EOL :: UInt8 = 9
-
-"A symbol, a special character sequence "
-const L_SYMBOL :: UInt8 = 10
-
-""
-const L_ :: UInt8 = 1
-
-""
-const L_ :: UInt8 = 1
-
-""
-const L_ :: UInt8 = 1
-
-""
-const L_ :: UInt8 = 1
-
-""
-const L_ :: UInt8 = 1
-
-""
-const L_ :: UInt8 = 1
-
-
-
-
-
-
-   # default: some Utf8 string, maybe empty
-    T_SPECIAL = 1  # special character (not white,letter, digit, symbol)
-
-    T_WHITE = 1  # whitespace, might contain codes >127
-    # delimited token, can contain escapes
-    T_CHAR = 2    # delimited token, delimiter removed
-    T_COMMENT = 3 # delimited token, delimiter removed
-    T_IDENT = 4   # identifier in UTF8
-    U_WHITE = 5   # whitespace, might contain codes >127
-    T_FLOAT = 6  # decimal and EXP format, might contain codes >127
-    T_SYMBOL = 7  #
-    I_STRING = 8   # some string, ISO-8851-1 encoded
-    I_ESCAPED = 9  #
-    I_CHAR = 10   #
-    I_COMMENT = 11#
-    I_IDENT = 12  # identifier
-    T_EOL = 13    # end-of-line marker
-    T_INT = 14# integer, all codes <128
-    I_SYMBOL = 15 #
-end
 """
 An Iterator for tokens.
 
-Interface requirements:
+#Interface requirements:
 
   * a field *source::String* holding the text to parse
+
   * iterate implementation
+
   * state in iterate is a simple *Int*: the index of the 1st code unit
     of the next token in *source*
-  * returned element in iterate is of type *TinyToken*
+
+  * returned element in iterate is of type *TinyToken*, its buffer
+    is *source*
+
+#Optional interface elements
+
+  * iterate temporarily stores additional category-specific state in its lexer
+    instance which is valid until the next iterate call. Access by
+    category-specific methods
+
+  * iterate may skip code units before and after the text in returned token,
+    e.g. delimiters, whitespace, comments. If something is skipped,
+    but might be needed by the calling code, it should be stored in some
+    temporary state.
+
+  * iterate may or may not encode code units directly in returned TinyToken,
+    depending on efficiency considerations: if token's code units are
+    frequently accessed afterwards, or if tokens are stored for a longer time
+    independently from *source*, direct encoding is recommended.
+
+  * for certain categories, iterate may assure to store code units in
+    returned token directly. This has to be documented as a post condition.
+    Calling code could probably annotate subsequent token use with @inbounds.
+
+  * iterate may optionally replace a recognized keyword or symbol by a
+    normalized code unit representation which is directly encoded in the
+    returned TinyToken. This should be clearly documented in the
+    iterate method. Example: "<=" and "≤" could be matched onto a single
+    representation, allowing to compare against other TinyToken-s with
+    fast 64-bit compare primitives (instead of string comparing loops).
+    Keywords longer than 7 code units could be replaced by an
+    abbreviation (which must be chosen to be unique within the token category).
+
+  * iterate may skip code units before and after the token text,
+    e.g. delimiters, whitespace, comments. If something is skipped,
+    but might be needed by the calling code, it could be stored in some
+    temporary state
+
 """
 abstract type AbstractLexer
 end
 
-"Leser elements are tokens"
+"Lexer elements are tokens"
 Base.eltype(::Type{AbstractLexer}) = TinyToken
 
 
