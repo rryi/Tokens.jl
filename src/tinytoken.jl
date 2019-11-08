@@ -1,6 +1,13 @@
 # TinyToken type and associated methods
 
-const maxTinySize = 7 # maximal size of a direct string in TinyToken
+"maximal count of code units directly encoded in a TinyToken"
+const MAX_TINY_SIZE = 7
+
+"bitmask to check if any inline code unit is not ascii"
+const NONASCIITEST :: UInt64 = 0x10000000100000001000000010000000100000001000000010000000
+
+"bitmask to restrict to all code units"
+const ALL_CODE_UNITS :: UInt64 = (UInt64(1)<<56)-1
 
 """
 Flyweight string with an associated token category.
@@ -87,13 +94,18 @@ If tiny flag is set and a method does not know which
 buffer is referenced, it must raise an exception.
 """
 struct TinyToken <: AbstractToken
-    bits::Int64
+    bits::UInt64
 
     """
     default constructor
     """
-    function TinyToken(cat::UInt8, s::String, first::Int, size::Int)
-        @boundscheck checkbounds 0 < first && first+size <= ncodeunits(s) ||
+    function TinyToken(cat::UInt8, s::String, first::Int, last::Int)
+        @boundscheck checkcategory(cat)
+        if first >= last
+            return new(UInt64(cat)<<59) # empty string
+        end
+        @boundscheck checkbounds(s,first,last)
+        size = last-first
         @boundscheck size < 8 || throw BoundsError("Size too large for TinyToken string constructor",size)
         new(bits)
     end
@@ -102,7 +114,8 @@ struct TinyToken <: AbstractToken
     function TinyToken(c::Char)
         bits ::UInt64 =
           (Base.codelen(c)) << 56) |
-          reinterpret(UInt32, c) << 24
+          (1 <<62) |
+          Int64(reinterpret(UInt32, c)) << 24
        new(bits)
    end
 
@@ -113,6 +126,8 @@ struct TinyToken <: AbstractToken
     function TinyToken(t::AbstractToken)
     end
 end
+
+
 
 
 function offset(t::TinyToken)
@@ -134,11 +149,10 @@ end
 
 
 function Base.cmp(a::TinyToken, b::TinyToken)
-    @checkbounds checktiny(a)
-    @checkbounds checktiny(b)
+    @checkbounds checktiny(a); checktiny(b)
     # both tiny: compare all code units in one step
-    (a.bits& 2^56-1) < (b.bits& 2^56-1) && return -1
-    (a.bits& 2^56-1) > (b.bits& 2^56-1) && return 1
+    (a.bits& 2^56-1) < (b.bits& (2^56-1)) && return -1
+    (a.bits& 2^56-1) > (b.bits& (2^56-1)) && return 1
     0
 end
 
@@ -151,7 +165,24 @@ category(t::TinyToken) = UInt8((t.bits>>59)&15)
 
 "throw an error if token references some buffer"
 function checktiny(t::TinyToken)
-    t.bits>=0 || throw(ErrorException("token references unknown buffer: &t"))
+    @boundscheck t.bits>=0 || throw(ErrorException("token references unknown buffer: &t"))
+end
+
+"throw an error if token references some buffer"
+function checkcategory(cat:UInt8)
+    @boundscheck cat <= 15 || throw(ErrorException("token category too large (max 15): &cat"))
+end
+
+function subtoken(t::T<:AbstractToken, first::Int, last::Int) = T(t,first,last)
+    @#boundscheck checktiny(t)
+    Int64 ret = t.bits
+
+    TinyToken ret = t
+    n = ncodeunits(t)
+    if (last<n)
+
+    end
+
 end
 
 
@@ -165,8 +196,6 @@ Base.show(io::IO, t::TinyToken)
 end
 
 
-"bitmask to check if any inline code unit is not ascii"
-const nonasciibits :: Int64 = reinterpret(Int64,0x10000000100000001000000010000000100000001000000010000000)
 
 function Base.isascii(t::TinyToken)
     @boundscheck checktiny(t)

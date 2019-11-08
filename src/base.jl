@@ -52,23 +52,80 @@ function offset end
 
 
 """
-    subtoken(t::AbstractToken, first::Int, last::Int)
-
-Like SubString with same parameters, but returns
-Creates a new token of same type with the same category,
-and content SubString(t,first,last)
-
-"""
-function subtoken end
-
-
-"""
     category(t::AbstractToken) :: TokenCategory
 
 Current category of given token. A value in 0:15.
-Meaning depends on context, see eg [`Lexer`](@ref.
+Meaning depends on context. [`Lexer`](@ref. uses
+the meaning defined in the following constants beginning with "L_"
+
 """
 function category end
+
+
+################ common category labels  #####################
+
+
+"Default category: a string without defined syntactic meaning"
+const L_STRING :: UInt8 = 0
+
+"whitespace sequence"
+const L_WHITE :: UInt8 = 1
+
+
+"Special character like % ! but no recognized symbol or escape character"
+const L_SPECIAL :: UInt8 = 2
+
+"string enclosed in quotes"
+const L_QUOTED :: UInt8 = 3
+
+"Identifier, usually a letter/digit sequence"
+const L_IDENT :: UInt8 = 4
+
+"A optionally signed number with a decimal separator and/or decimal exponent"
+const L_FLOAT :: UInt8 = 5
+
+"all characters up to but excluding a termination sequence"
+const L_SEQ1 :: UInt8 = 6
+
+"all characters up to but excluding a termination sequence"
+const L_SEQ2 :: UInt8 = 7
+
+"A comment, including termination sequences"
+const L_COMMENT :: UInt8 = 8
+
+"End of line sequence, 1 or 2 characters"
+const L_EOL :: UInt8 = 9
+
+"A symbol, a special character sequence "
+const L_SYMBOL :: UInt8 = 10
+
+"string enclosed in single quotes, in many applications a single character"
+const L_CHAR :: UInt8 = 11
+
+"identifier recognized as keyword"
+const L_KEY :: UInt8 = 12
+
+"Sequence of digits with optional leading sign"
+const L_INT :: UInt8 = 13
+
+"all characters up to but excluding a termination sequence"
+const L_SEQ3 :: UInt8 = 14
+
+"all characters up to but excluding a termination sequence"
+const L_SEQ4 :: UInt8 = 15
+
+
+"""
+    subtoken(t::AbstractToken, first::Int, last::Int)
+
+Like SubString with same parameters, but returns
+a new token of same type with the same category
+and content SubString(t,first,last)
+
+"""
+subtoken(t::T<:AbstractToken, first::Int, last::Int) = T(t,first,last)
+
+
 
 #= try with default implementatio  using isvalid ...
 
