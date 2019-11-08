@@ -2,6 +2,7 @@
 
 # abstract type AbstractToken{C} where {C<:Integer} <: AbstractString
 
+
 """
 A categorized string, supertype of all token types in this module.
 

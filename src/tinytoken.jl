@@ -99,6 +99,16 @@ struct TinyToken <: AbstractToken
     end
 end
 
+"""
+    t"anytext"
+
+returns a TinyToken containing "anytext".
+
+Restriction: argument literal must resolve to a
+character sequence of at most 7 code units    
+"""
+macro t_str(s) = TinyToken(s)
+
 
 function offset(t::TinyToken)
     mask = (t.bits>>63) & (2^32-1) # 0 for direct CU, 0xffffffff else
