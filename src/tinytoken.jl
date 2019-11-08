@@ -4,10 +4,13 @@
 const MAX_TINY_SIZE = 7
 
 "bitmask to check if any inline code unit is not ascii"
-const NONASCIITEST :: UInt64 = 0x10000000100000001000000010000000100000001000000010000000
+const NOTASCII_BITS :: UInt64 = 0x10000000100000001000000010000000100000001000000010000000
 
 "bitmask to restrict to all code units"
-const ALL_CODE_UNITS :: UInt64 = (UInt64(1)<<56)-1
+const CODEUNIT_BITS :: UInt64 = (UInt64(1)<<56)-1
+
+"bitmask to test for tiny. Bit set -> (offset,size) pair stored"
+const NOTTINY_BIT :: UInt64 = (UInt64(1)<<63)
 
 """
 Flyweight string with an associated token category.
@@ -40,67 +43,99 @@ if the method is called in an @inbounds block.
 Code annotated with @inbounds assures not only that all used indices are in
 bounds. It additionally assures that all code units are directly stored
 in the TinyToken instance for all method calls with a TinyToken parameter
-which is not accomplished by a code unit buffer parameter.
+which is not accompanied by a code unit buffer parameter.
 
 # implementation details
 
-Memory layout is 8 bytes, interpreted as an Int64 in host format
+Memory layout is 8 bytes, RAM representation as an UInt64 in host format
 (this can have consequences for serializing, if data is exchanged
 between systems of differing endianness).
 
-The encoding of the most significant byte is:
+If the most significant bit is clear, we have a really tiny string of
+up to 7 code units, directly encoded in the TinyToken value in its
+bytes 6 down to 0. If size is less than 7, cu[7] .. cu[size+1] must be 0.
+
+The memory layout is similar to the julia memory layout for the Char type,
+with the difference that the code unit count is explicitly stored in one byte,
+together with category and the "tiny flag".
+
+Order is chosen in a way that a lexikographically correct string compare
+for TinyToken-s can be done with one single UInt64 compare operation.
+
+Memory layout:
+
+```
+bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
+    =0 =========== ========
+    |  |           |        |     |     |     |     |     |     |
+    |  |           |        cu[1] cu[2] cu[3] cu[4] cu[5] cu[6] cu[7]
+    |  |           size: 0..7
+    |  category: 0..15
+    |
+    =0: really tiny, 0..7 code units stored directly in byte 6..1
 ```
 
-bit7: tiny flag.
-    bit7=0: this is a self-contained TinyToken with
-            0..7 code units
-    bit7=1: this is a (category,length,offset) tuple,
-            only valid in a context which supplies a
-            buffer holding the code unit data.
+If the most significant bit is set, we have a usually larger string of
+up to 2^27-1 code units, encoded elsewere in an external code unit buffer.
+The TinyToken value stores offset and size information in byte 0..6.
 
-bit6: encoding flag
-bit3456: category bitfield, values 0..15
-bit012: length bitfield, values 0..7.
-        !!contains lowest length bits if bit7=1!!
+Treatment of the external code unit buffer needs some attention: it is NOT
+part of the TinyToken type. Instead, methods operating on TinyToken-s code
+units need some buffer supply by its context, usually via an additional
+parameter or a closure. Having no buffer information will throw an exception.
+
+Memory layout:
+
+```
+bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
+    =1 =========== ======== ================= =======================
+    |  |           |        |                 |
+    |  |           |        |                 offset: 0..2^32-1
+    |  |           |        size>>3: bits 3..26 of size
+    |  |           size&7: lowest 3 bits
+    |  category: 0..15
+    |
+    =1: code units cu[1]..cu[size] stored in buffer[1+offset] .. buffer[1+offset+size]
 ```
 
-## tiny flag clear: 0..7 code units stored directly
 
-Next significant byte is the 1st code unit or 0 (length 0).
-... Last significant byte is 7th code unit or 0 (length <7).
-
-This storage format allows for fast string comparison
-by lexicographic code units: simply mask off the most
-significant byte, reinterpret as Int64 or UInt64 and do
-an integer compare.
-
-## tiny flag set: 32 bit offset, 27 bit length
-If the tiny flag is set, the four least significant
-bytes are interpreted as an UInt32, giving an offset,
-and the 4 most significant bytes are interpreted
-as an UInt32, giving the length in its lower 24 bits
-plus 3 bits in the most significant byte, for a total
-of 27 bits for the length encoding.
-
-The context must supply a buffer containing code units.
-The offset gives the number of code units in the buffer
-before the first code unit of this TinyToken.
-
-Context is either an additional parameter in the
-functions dealing with a TinyToken, or an additional
-field in a larger AbstractToken structure.
-
-If tiny flag is set and a method does not know which
-buffer is referenced, it must raise an exception.
 """
 struct TinyToken <: AbstractToken
     bits::UInt64
 
     """
-    default constructor
+    lowlevel constructor for "nottiny" token.
+
+    buffer is only supplied to test if parameters are in bounds
+
+    Has UInt64 parameters to reduce chances that someone uses it
+    unintentionally.
     """
-    function TinyToken(cat::UInt8, s::String, first::Int, last::Int)
+    function TinyToken(cat::UInt64, offset::UInt64, size::UInt64, buffer:String)
         @boundscheck checkcategory(cat)
+        @boundscheck check_ofs_size(buffer, offset, size)
+
+        bsize = ncodeunits(buffer)
+        @checkbounds
+        @boundscheck checkoffset(offset)
+        @boundscheck checksize(size,1<<27-1)
+        new (NOTTINY_BIT | cat<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
+    end
+
+    """
+    constructor for "tiny" string token
+    """
+    function TinyToken(cat::Unsigned = 0, s::String)
+        @boundscheck checkcategory(cat)
+        size = ncodeunits(s)
+        @boundscheck checksize(size,7)
+        new (NOTTINY_BIT | cat<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
+    end
+
+
+    function TinyToken(cat::UInt8, s::String, offset::UInt64, size::Int)
+        @boundscheck checkcategory(cat)
+        msb = UInt64(cat)<<59 # most significant byte
         if first >= last
             return new(UInt64(cat)<<59) # empty string
         end
@@ -114,7 +149,7 @@ struct TinyToken <: AbstractToken
     function TinyToken(c::Char)
         bits ::UInt64 =
           (Base.codelen(c)) << 56) |
-          (1 <<62) |
+          ( <<59 |
           Int64(reinterpret(UInt32, c)) << 24
        new(bits)
    end
@@ -133,7 +168,7 @@ end
 returns a TinyToken containing "anytext".
 
 Restriction: argument literal must resolve to a
-character sequence of at most 7 code units    
+character sequence of at most 7 code units
 """
 macro t_str(s) = TinyToken(s)
 
@@ -141,25 +176,25 @@ macro t_str(s) = TinyToken(s)
 
 
 function offset(t::TinyToken)
-    mask = (t.bits>>63) & (2^32-1) # 0 for direct CU, 0xffffffff else
+    mask = ((reinterpret(Int64,t.bits)>>63) & (UInt64(2^32)-1) # 0 for direct CU, 0xffffffff else
     convert(UInt32,t.bits & mask)
 end
 
 function Base.ncodeunits(t::TinyToken)
     # tricky code without jumps:
-    # if s.bits is positive, we have ncodeunits in lowest 3 bits
-    # this extracts the right part in final convert.
-    # otherwise, by convention these bits are 0, and we have the length
-    # in 24 bits in the bytes following the most significant one.
-    # we construct this mask by arithmetic shift, duplicating the
-    # most significant bit which is 1 in this case, otherwise 0
-    masklen = (t.bits >> 31) & ((2^24-1)<<32) ## length bitfield mask
-    ((t.bits &masklen)>>>29) | ((t.bits & (7<<56))>>>56)
+    # 3 lowest bits of the size are always stored at bit position 56..58.
+    # if NONASCII_BIT is set, we have additional 24 bits for size at bits 32..55
+    # We build a mask for bits 32..55 all 1 (bit 63 set, data in buffer)
+    # or 0 (bit 63 clear, all data in token, size is 0..7)
+    # by arithmetic shift of bit 63. ANDing with t.bits and shift by 29 gives
+    # the high bits 3..26 of the size.
+    masksize = (reinterpret(Int64,t.bits)>>31) & ((2^24-1)<<32) ## length bitfield mask
+    ((t.bits &masksize)>>>29) | ((t.bits >>>56) & 7)
 end
 
 
 function Base.cmp(a::TinyToken, b::TinyToken)
-    @checkbounds checktiny(a); checktiny(b)
+    @boundscheck checktiny(a); checktiny(b)
     # both tiny: compare all code units in one step
     (a.bits& 2^56-1) < (b.bits& (2^56-1)) && return -1
     (a.bits& 2^56-1) > (b.bits& (2^56-1)) && return 1
@@ -175,16 +210,37 @@ category(t::TinyToken) = UInt8((t.bits>>59)&15)
 
 "throw an error if token references some buffer"
 function checktiny(t::TinyToken)
-    @boundscheck t.bits>=0 || throw(ErrorException("token references unknown buffer: &t"))
+    @boundscheck t.bits&NOTTINY_BIT >=0 || throw(ErrorException("TinyToken references unknown buffer: &t"))
 end
+
+"throw an error if token category is out of bounds"
+function checkcategory(cat::Unsigned)
+    @boundscheck cat <= 15 || throw(ErrorException("Token category too large (max 15): &cat"))
+    nothing
+end
+
+"throw an error if token offset is out of bounds"
+function checkoffset(ofs::Unsigned)
+    @boundscheck ofs <= typemax(UInt32) || throw(ErrorException("token offset too large: &ofs"))
+    nothing
+
+end
+
+function check_ofs_size(buffer::String, offset, size)
+    bsize = ncodeunits(buffer)
+    offset >= 0 && offset <= bsize || throw BoundsError(buffer,offset+1)
+    size >= 0 && offset+size <= bsize || BoundsError(buffer,offset+size)
+end
+
 
 "throw an error if token references some buffer"
-function checkcategory(cat:UInt8)
-    @boundscheck cat <= 15 || throw(ErrorException("token category too large (max 15): &cat"))
+function checksize(size::Unsigned, maxsize=7))
+    @boundscheck size <= maxsize || throw(ErrorException("too many code units: &size"))
 end
 
+
 function subtoken(t::T<:AbstractToken, first::Int, last::Int) = T(t,first,last)
-    @#boundscheck checktiny(t)
+    #@boundscheck checktiny(t)
     Int64 ret = t.bits
 
     TinyToken ret = t
