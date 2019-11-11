@@ -12,6 +12,13 @@ It is accessed by [`category`](@ref)(t::AbstractToken).
 Its meaning is context dependent. See  [`Lexer`](@ref)
 for a concrete example.
 
+# interface requirements
+
+Every implementation must use Utf8 encoding: token methods operate
+mostly on Utf8 code units and rely on its properties.
+
+# implementations in this module
+
 This module supplies a very memory efficient implementation
 for very short tokens with [`TinyToken`](@ref), a
 flyweight string plus category in 8 bytes. It can act as a
@@ -32,6 +39,12 @@ a category field.
 abstract type AbstractToken <: AbstractString
 end
 
+
+""
+struct SizeOffset
+    size :: UInt32
+    offset :: UInt32
+end
 
 #########################################################
 ################# AbstractToken API #####################

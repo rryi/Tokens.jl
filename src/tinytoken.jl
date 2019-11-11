@@ -106,26 +106,25 @@ struct TinyToken <: AbstractToken
     """
     lowlevel constructor for TinyToken with external buffer.
 
-    buffer is needed to test if parameters are in bounds
+    buffer is needed to test if parameters are in bounds - no code
+    units are copied. 
 
-    Has UInt64 parameters to reduce chances that someone uses it
+    Has explicit UInt parameters to reduce chances that someone uses it
     unintentionally.
     """
-    function TinyToken(cat::UInt64, offset::UInt64, size::UInt64, buffer:String)
+    function TinyToken(cat::UInt8, offset::UInt32, size::UInt64, buffer:String)
         @boundscheck checkcategory(cat)
         bsize = ncodeunits(buffer)
         @boundscheck check_ofs_size(offset, size,bsize)
-
-        @checkbounds
-        @boundscheck checkoffset(offset)
         @boundscheck checksize(size,1<<27-1)
-        new (NOTTINY_BIT | cat<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
+        new (NOTTINY_BIT | UInt64(cat)<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
     end
+
 
     """
     constructor for "tiny" string token
     """
-    function TinyToken(cat::Unsigned = 0, s::String)
+    function TinyToken(cat::Unsigned, s::String)
         @boundscheck checkcategory(cat)
         size = ncodeunits(s)
         @boundscheck checksize(size,7)
@@ -166,27 +165,27 @@ end
     t?"anytext"
 
 returns a TinyToken containing "anytext" with
-category ?. ? is a hex character, interpreted as an int
+category ?. ? is a hex character, interpreted as an UInt8
 
 Restriction: argument literal must resolve to a
 character sequence of at most 7 code units
 """
-macro t0_str(s) = TinyToken(0,s)
-macro t1_str(s) = TinyToken(1,s)
-macro t2_str(s) = TinyToken(2,s)
-macro t3_str(s) = TinyToken(3,s)
-macro t4_str(s) = TinyToken(4,s)
-macro t5_str(s) = TinyToken(5,s)
-macro t6_str(s) = TinyToken(6,s)
-macro t7_str(s) = TinyToken(7,s)
-macro t8_str(s) = TinyToken(8,s)
-macro t9_str(s) = TinyToken(9,s)
-macro ta_str(s) = TinyToken(10,s)
-macro tb_str(s) = TinyToken(11,s)
-macro tc_str(s) = TinyToken(12,s)
-macro td_str(s) = TinyToken(13,s)
-macro te_str(s) = TinyToken(14,s)
-macro tf_str(s) = TinyToken(15,s)
+macro t0_str(s) = TinyToken(0x0,s)
+macro t1_str(s) = TinyToken(0x1,s)
+macro t2_str(s) = TinyToken(0x2,s)
+macro t3_str(s) = TinyToken(0x3,s)
+macro t4_str(s) = TinyToken(0x4,s)
+macro t5_str(s) = TinyToken(0x5,s)
+macro t6_str(s) = TinyToken(0x6,s)
+macro t7_str(s) = TinyToken(0x7,s)
+macro t8_str(s) = TinyToken(0x8,s)
+macro t9_str(s) = TinyToken(0x9,s)
+macro ta_str(s) = TinyToken(0xa,s)
+macro tb_str(s) = TinyToken(0xb,s)
+macro tc_str(s) = TinyToken(0xc,s)
+macro td_str(s) = TinyToken(0xd,s)
+macro te_str(s) = TinyToken(0xe,s)
+macro tf_str(s) = TinyToken(0xf,s)
 
 
 
