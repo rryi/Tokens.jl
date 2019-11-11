@@ -126,7 +126,7 @@ struct TinyToken <: AbstractToken
     application code - NO CHECKS AT ALL are performed, the resulting
     TinyToken might be invalid.
 
-    Has UInt64 parameters to reduce chances that someone uses it
+    Has explicit UInt parameters to reduce chances that someone uses it
     unintentionally.
 
     In application code, use TinyToken(category,offset,size,s<:AbstractString).
@@ -159,6 +159,7 @@ struct TinyToken <: AbstractToken
         @boundscheck checkcategory(cat)
         @inbounds TinyToken(UInt64(cat),UInt64(0),UInt64(ncodeunits(s),s)
     end
+
 
     """
     constructor for "tiny" string token
@@ -204,7 +205,7 @@ end
     t?"shorttext"
 
 returns a TinyToken containing "anytext" with
-category ?. ? is a hex character, interpreted as an int
+category ?. ? is a hex character, interpreted as an UInt8
 
 Restriction: argument literal must resolve to a
 character sequence of at most 7 code units
