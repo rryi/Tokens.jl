@@ -30,6 +30,23 @@ case, as an offset (32bit) and a length (27bit).
 
 See [`Token`](@ref) and [`MutableToken`](@ref) for an implementation.
 
+# direct use (without buffer)
+
+Strings with up to 7 Utf8 code units can be stored in one TinyToken
+instance, without an additional buffer. Size limit is checked unless you
+annotate the call with @inbounds. Use one of the constructors
+
+```
+TinyToken(category::Int,s::AbstractString)
+TinyToken(category::Int,offset::UInt64, n_codeunits::UInt64, s::AbstractString)
+```
+
+
+
+# use with buffer
+
+
+
 # warning on @inbounds usage
 
 Methods that have a TinyToken parameter, need access to its code units,
@@ -102,30 +119,51 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
 """
 struct TinyToken <: AbstractToken
     bits::UInt64
-
     """
-    lowlevel constructor for TinyToken with external buffer.
+    UNSAFE !! lowlevel constructor referencing some external buffer.
 
-    buffer is needed to test if parameters are in bounds
+    This constructor is used internally and should not be called from
+    application code - NO CHECKS AT ALL are performed, the resulting
+    TinyToken might be invalid.
 
     Has UInt64 parameters to reduce chances that someone uses it
     unintentionally.
-    """
-    function TinyToken(cat::UInt64, offset::UInt64, size::UInt64, buffer:String)
-        @boundscheck checkcategory(cat)
-        bsize = ncodeunits(buffer)
-        @boundscheck check_ofs_size(offset, size,bsize)
 
-        @checkbounds
-        @boundscheck checkoffset(offset)
-        @boundscheck checksize(size,1<<27-1)
-        new (NOTTINY_BIT | cat<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
+    In application code, use TinyToken(category,offset,size,s<:AbstractString).
+    """
+    function TinyToken(category::UInt64, offset::UInt64, size::UInt64)
+        new (NOTTINY_BIT | category<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
+    end
+
+
+    """
+    UNSAFE !! internal lowlevel constructor.
+
+    This constructor is used internally and should not be called from
+    application code - NO CHECKS AT ALL are performed, the resulting
+    TinyToken might be invalid.
+
+    Has UInt64 parameter to reduce chances that someone uses it
+    unintentionally.
+
+    In application code, use TinyToken(category,offset,size,s<:AbstractString).
+    """
+    function TinyToken(tinytokenbits::UInt64)
+        new (tinytokenbits)
     end
 
     """
     constructor for "tiny" string token
     """
-    function TinyToken(cat::Unsigned = 0, s::String)
+    function TinyToken(cat::Unsigned, s::Union{AbstractToken,String,SubString{String})
+        @boundscheck checkcategory(cat)
+        @inbounds TinyToken(UInt64(cat),UInt64(0),UInt64(ncodeunits(s),s)
+    end
+
+    """
+    constructor for "tiny" string token
+    """
+    function TinyToken(cat::Unsigned, s::AbstractString)
         @boundscheck checkcategory(cat)
         size = ncodeunits(s)
         @boundscheck checksize(size,7)
@@ -163,7 +201,7 @@ struct TinyToken <: AbstractToken
 end
 
 """
-    t?"anytext"
+    t?"shorttext"
 
 returns a TinyToken containing "anytext" with
 category ?. ? is a hex character, interpreted as an int
@@ -171,22 +209,22 @@ category ?. ? is a hex character, interpreted as an int
 Restriction: argument literal must resolve to a
 character sequence of at most 7 code units
 """
-macro t0_str(s) = TinyToken(0,s)
-macro t1_str(s) = TinyToken(1,s)
-macro t2_str(s) = TinyToken(2,s)
-macro t3_str(s) = TinyToken(3,s)
-macro t4_str(s) = TinyToken(4,s)
-macro t5_str(s) = TinyToken(5,s)
-macro t6_str(s) = TinyToken(6,s)
-macro t7_str(s) = TinyToken(7,s)
-macro t8_str(s) = TinyToken(8,s)
-macro t9_str(s) = TinyToken(9,s)
-macro ta_str(s) = TinyToken(10,s)
-macro tb_str(s) = TinyToken(11,s)
-macro tc_str(s) = TinyToken(12,s)
-macro td_str(s) = TinyToken(13,s)
-macro te_str(s) = TinyToken(14,s)
-macro tf_str(s) = TinyToken(15,s)
+macro t0_str(s) = TinyToken(0x0,s)
+macro t1_str(s) = TinyToken(0x1,s)
+macro t2_str(s) = TinyToken(0x2,s)
+macro t3_str(s) = TinyToken(0x3,s)
+macro t4_str(s) = TinyToken(0x4,s)
+macro t5_str(s) = TinyToken(0x5,s)
+macro t6_str(s) = TinyToken(0x6,s)
+macro t7_str(s) = TinyToken(0x7,s)
+macro t8_str(s) = TinyToken(0x8,s)
+macro t9_str(s) = TinyToken(0x9,s)
+macro ta_str(s) = TinyToken(0xa,s)
+macro tb_str(s) = TinyToken(0xb,s)
+macro tc_str(s) = TinyToken(0xc,s)
+macro td_str(s) = TinyToken(0xd,s)
+macro te_str(s) = TinyToken(0xe,s)
+macro tf_str(s) = TinyToken(0xf,s)
 
 
 

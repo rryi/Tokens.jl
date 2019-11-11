@@ -30,14 +30,15 @@ tryy(100,7)
 
 
 struct TinyToken
-    bits::Int64
-
-    TinyToken(i::Any) = TinyToken(0,string(i))
+    bits::UInt64
+    #TinyToken(i::Any) = TinyToken(0,string(i))
     function TinyToken(cat::Int,s::AbstractString)
         println("calling SE inner")
         new(cat<<56)
     end
 end
+
+
 
 tryit = TinyToken(1,"")
 dump(tryit)
@@ -51,8 +52,20 @@ try2 = TinyToken(3)
 
 @enum en ::UInt8 e1 e2 e3 e4 e5
 
-f1(i::Int) = i+7
 
 f1(e::en) = Int(e)+7
 
 f1(i::UInt8) = i+7
+
+f1(i::Int) = i+7
+
+struct Words32
+         lo::UInt32
+         hi::UInt32
+       end
+a=UInt64(0x123456789abcdef0)
+b=reinterpret(Words32,a)
+
+
+
+type t2 = Tuple{int32,Int32}
