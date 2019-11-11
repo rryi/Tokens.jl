@@ -104,18 +104,18 @@ struct TinyToken <: AbstractToken
     bits::UInt64
 
     """
-    lowlevel constructor for "nottiny" token.
+    lowlevel constructor for TinyToken with external buffer.
 
-    buffer is only supplied to test if parameters are in bounds
+    buffer is needed to test if parameters are in bounds
 
     Has UInt64 parameters to reduce chances that someone uses it
     unintentionally.
     """
     function TinyToken(cat::UInt64, offset::UInt64, size::UInt64, buffer:String)
         @boundscheck checkcategory(cat)
-        @boundscheck check_ofs_size(buffer, offset, size)
-
         bsize = ncodeunits(buffer)
+        @boundscheck check_ofs_size(offset, size,bsize)
+
         @checkbounds
         @boundscheck checkoffset(offset)
         @boundscheck checksize(size,1<<27-1)
@@ -163,20 +163,35 @@ struct TinyToken <: AbstractToken
 end
 
 """
-    t"anytext"
+    t?"anytext"
 
-returns a TinyToken containing "anytext".
+returns a TinyToken containing "anytext" with
+category ?. ? is a hex character, interpreted as an int
 
 Restriction: argument literal must resolve to a
 character sequence of at most 7 code units
 """
-macro t_str(s) = TinyToken(s)
-
+macro t0_str(s) = TinyToken(0,s)
+macro t1_str(s) = TinyToken(1,s)
+macro t2_str(s) = TinyToken(2,s)
+macro t3_str(s) = TinyToken(3,s)
+macro t4_str(s) = TinyToken(4,s)
+macro t5_str(s) = TinyToken(5,s)
+macro t6_str(s) = TinyToken(6,s)
+macro t7_str(s) = TinyToken(7,s)
+macro t8_str(s) = TinyToken(8,s)
+macro t9_str(s) = TinyToken(9,s)
+macro ta_str(s) = TinyToken(10,s)
+macro tb_str(s) = TinyToken(11,s)
+macro tc_str(s) = TinyToken(12,s)
+macro td_str(s) = TinyToken(13,s)
+macro te_str(s) = TinyToken(14,s)
+macro tf_str(s) = TinyToken(15,s)
 
 
 
 function offset(t::TinyToken)
-    mask = ((reinterpret(Int64,t.bits)>>63) & (UInt64(2^32)-1) # 0 for direct CU, 0xffffffff else
+    mask = ((reinterpret(Int64,t.bits)>>63) & (UInt64(1)<<32 -1) # 0 for direct CU, 0xffffffff else
     convert(UInt32,t.bits & mask)
 end
 
@@ -223,13 +238,13 @@ end
 function checkoffset(ofs::Unsigned)
     @boundscheck ofs <= typemax(UInt32) || throw(ErrorException("token offset too large: &ofs"))
     nothing
-
 end
 
-function check_ofs_size(buffer::String, offset, size)
-    bsize = ncodeunits(buffer)
-    offset >= 0 && offset <= bsize || throw BoundsError(buffer,offset+1)
-    size >= 0 && offset+size <= bsize || BoundsError(buffer,offset+size)
+"throw an error if token offset is out of bounds"
+function check_ofs_size(offset:: Unsigned, size:: Unsigned, limit::Unsigned)
+    @boundscheck offset <= limit || throw BoundsError(offset,limit)
+    @boundscheck offset+size <= bsize || throw BoundsError(offset+size,limit)
+    nothing
 end
 
 
