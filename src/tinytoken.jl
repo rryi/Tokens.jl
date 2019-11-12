@@ -12,6 +12,11 @@ const CODEUNIT_BITS :: UInt64 = (UInt64(1)<<56)-1
 "bitmask to test for tiny. Bit set -> (offset,size) pair stored"
 const NOTTINY_BIT :: UInt64 = (UInt64(1)<<63)
 
+
+"marker type to tag constructors as unsafe"
+struct Unsafe end
+
+
 """
 Flyweight string with an associated token category.
 
@@ -118,9 +123,9 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
 
 """
 struct TinyToken <: AbstractToken
-    bits::UInt64
+    bits::Int64
     """
-    UNSAFE !! lowlevel constructor referencing some external buffer.
+    UNSAFE !! lowlevel constructor for a token referencing some external buffer.
 
     This constructor is used internally and should not be called from
     application code - NO CHECKS AT ALL are performed, the resulting
@@ -131,11 +136,9 @@ struct TinyToken <: AbstractToken
 
     In application code, use TinyToken(category,offset,size,s<:AbstractString).
     """
-    function TinyToken(category::UInt64, offset::UInt64, size::UInt64)
+    function TinyToken(::Unsafe, category::UInt64, offset::UInt64, size::UInt64)
         new (NOTTINY_BIT | category<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
     end
-
-
     """
     UNSAFE !! internal lowlevel constructor.
 
@@ -151,7 +154,6 @@ struct TinyToken <: AbstractToken
     function TinyToken(tinytokenbits::UInt64)
         new (tinytokenbits)
     end
-
     """
     constructor for "tiny" string token
     """
@@ -159,8 +161,6 @@ struct TinyToken <: AbstractToken
         @boundscheck checkcategory(cat)
         @inbounds TinyToken(UInt64(cat),UInt64(0),UInt64(ncodeunits(s),s)
     end
-
-
     """
     constructor for "tiny" string token
     """

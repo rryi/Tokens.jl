@@ -3,6 +3,9 @@ using Random, BenchmarkTools
 
 struct TinyToken
     bits::UInt64
+    function TinyToken(data::Integer)
+        new(UInt64(data))
+    end
 end
 
 
