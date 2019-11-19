@@ -4,13 +4,13 @@
 const MAX_TINY_SIZE = 7
 
 "bitmask to check if any inline code unit is not ascii"
-const NOTASCII_BITS :: UInt64 = 0x10000000100000001000000010000000100000001000000010000000
+const NOTASCII_BITS :: Int64 = 0x10000000100000001000000010000000100000001000000010000000
 
 "bitmask to restrict to all code units"
-const CODEUNIT_BITS :: UInt64 = (UInt64(1)<<56)-1
+const CODEUNIT_BITS :: Int64 = (Int64(1)<<56)-1
 
 "bitmask to test for tiny. Bit set -> (offset,size) pair stored"
-const NOTTINY_BIT :: UInt64 = (UInt64(1)<<63)
+const NOTTINY_BIT :: Int64 = (Int64(1)<<63)
 
 
 "marker type to tag constructors as unsafe"
@@ -26,7 +26,7 @@ used as a memory efficient substitute for String instances, avoiding
 any pointer overhead.
 
 Combined with a code unit buffer, it can hold strings of a length below
-2**24. The flyweight value encodes an offset and a length, in this case.
+2**27. The flyweight value encodes an offset and a length, in this case.
 
 TinyToken can be used directly in application code if its length limit
 fits the use case. More common is a combination with an additional code unit
@@ -35,18 +35,39 @@ case, as an offset (32bit) and a length (27bit).
 
 See [`Token`](@ref) and [`MutableToken`](@ref) for an implementation.
 
-# direct use (without buffer)
+# methods without code unit buffer parameter
 
 Strings with up to 7 Utf8 code units can be stored in one TinyToken
-instance, without an additional buffer. Size limit is checked unless you
-annotate the call with @inbounds. Use one of the constructors
+instance, without an additional buffer. For most functions using a TinyToken,
+there is a method with a TinyToken parameter but no code unit buffer parameter.
+There are two reasons why a code unit buffer parameter is not present:
 
-```
-TinyToken(category::Int,s::AbstractString)
-TinyToken(category::Int,offset::UInt64, n_codeunits::UInt64, s::AbstractString)
-```
+(a) Function does not access code units, like *ncodeunits* or *category*.
 
+(b) Function needs code unit access, but an optimized method for short strings
+stored directly in the TinyToken instance is supplied.
 
+In case (b) checks have to be implemented that grant:
+
+  * TinyToken input parameters have stored its code units directly. Please take
+    into account, that a number of code units below 8 does not imply that those
+    code units are stored directly. You have to check is not sufficient a TinyToken with less than 8 code units can cana length below 8 up to 7 does is not necessarily
+    stored directlycan
+
+  * TinyToken results returned without a code unit buffer store its code units
+    directly.
+
+Those checks are annoted with *@boundscheck*. This allows for efficient
+operation when it is known in advance that the whole operation can be carried
+out on TinyToken-s without external code unit buffer, by annotating the calls
+with *@inbounds*.
+
+the operation
+
+  It is an optimized version Those methods should
+
+ Size limit is checked unless you
+annotate the call with @inbounds.
 
 # use with buffer
 
@@ -57,7 +78,7 @@ TinyToken(category::Int,offset::UInt64, n_codeunits::UInt64, s::AbstractString)
 Methods that have a TinyToken parameter, need access to its code units,
 but have no associated code unit buffer as a parameter, will check if
 code units are stored as part of the supplied token. If not, they will
- throw a BoundsError.
+throw a BoundsError.
 
 This check is annotated with @boundscheck, so it is probably skipped
 if the method is called in an @inbounds block.
@@ -69,13 +90,23 @@ which is not accompanied by a code unit buffer parameter.
 
 # implementation details
 
-Memory layout is 8 bytes, RAM representation as an UInt64 in host format
-(this can have consequences for serializing, if data is exchanged
-between systems of differing endianness).
+There are two variants of TinyToken, that one with directly encoded dode units,
+and that one referencing an external buffer. The Julia-typical way for an
+implementation would be to declare these variants as different types and to
+define TinyToken as a union of these variants. The price would be to have one
+additional byte per instance for the union overhead. Instead, the variants
+are managed internally by the functions working with TinyToken, and type
+implementation details are marked as private and hidden to the extend possible
+with Julia.
 
-If the most significant bit is clear, we have a really tiny string of
+Design goal is to keep an TinyToken instance in one 64bit value.
+Memory layout is 8 bytes, RAM representation is an Int64 in host format.
+The sign bit (most significant bit) is used to distinguish the two TinyToken
+variants.
+
+If the sign bit is clear, we have a really tiny string of
 up to 7 code units, directly encoded in the TinyToken value in its
-bytes 6 down to 0. If size is less than 7, cu[7] .. cu[size+1] must be 0.
+bytes 6 down to 0. If size is less than 7, unused code units must be 0.
 
 The memory layout is similar to the julia memory layout for the Char type,
 with the difference that the code unit count is explicitly stored in one byte,
@@ -104,7 +135,7 @@ The TinyToken value stores offset and size information in byte 0..6.
 Treatment of the external code unit buffer needs some attention: it is NOT
 part of the TinyToken type. Instead, methods operating on TinyToken-s code
 units need some buffer supply by its context, usually via an additional
-parameter or a closure. Having no buffer information will throw an exception.
+parameter or a closure. Missing buffer information will cause an exception.
 
 Memory layout:
 
@@ -117,7 +148,7 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
     |  |           size&7: lowest 3 bits
     |  category: 0..15
     |
-    =1: code units cu[1]..cu[size] stored in buffer[1+offset] .. buffer[1+offset+size]
+    =1: code units stored in buffer[1+offset] .. buffer[1+offset+size]
 ```
 
 
@@ -129,77 +160,86 @@ struct TinyToken <: AbstractToken
 
     This constructor is used internally and should not be called from
     application code - NO CHECKS AT ALL are performed, the resulting
-    TinyToken might be invalid.
-
-    Has explicit UInt parameters to reduce chances that someone uses it
-    unintentionally.
-
-    In application code, use TinyToken(category,offset,size,s<:AbstractString).
+    TinyToken might be invalid. The field parameter contains several
+    data fields packed into 8 bytes on bit level.
     """
-    function TinyToken(::Unsafe, category::UInt64, offset::UInt64, size::UInt64)
-        new (NOTTINY_BIT | category<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
-    end
-    """
-    UNSAFE !! internal lowlevel constructor.
-
-    This constructor is used internally and should not be called from
-    application code - NO CHECKS AT ALL are performed, the resulting
-    TinyToken might be invalid.
-
-    Has UInt64 parameter to reduce chances that someone uses it
-    unintentionally.
-
-    In application code, use TinyToken(category,offset,size,s<:AbstractString).
-    """
-    function TinyToken(tinytokenbits::UInt64)
-        new (tinytokenbits)
-    end
-    """
-    constructor for "tiny" string token
-    """
-    function TinyToken(cat::Unsigned, s::Union{AbstractToken,String,SubString{String})
-        @boundscheck checkcategory(cat)
-        @inbounds TinyToken(UInt64(cat),UInt64(0),UInt64(ncodeunits(s),s)
-    end
-    """
-    constructor for "tiny" string token
-    """
-    function TinyToken(cat::Unsigned, s::AbstractString)
-        @boundscheck checkcategory(cat)
-        size = ncodeunits(s)
-        @boundscheck checksize(size,7)
-        new (NOTTINY_BIT | cat<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
-    end
-
-
-    function TinyToken(cat::UInt8, s::String, offset::UInt64, size::Int)
-        @boundscheck checkcategory(cat)
-        msb = UInt64(cat)<<59 # most significant byte
-        if first >= last
-            return new(UInt64(cat)<<59) # empty string
-        end
-        @boundscheck checkbounds(s,first,last)
-        size = last-first
-        @boundscheck size < 8 || throw BoundsError("Size too large for TinyToken string constructor",size)
-        new(bits)
-    end
-
-
-    function TinyToken(c::Char)
-        bits ::UInt64 =
-          (Base.codelen(c)) << 56) |
-          ( <<59 |
-          Int64(reinterpret(UInt32, c)) << 24
-       new(bits)
-   end
-
-    "override default constructor to convert anything to a string token"
-    TinyToken (value::Any) = TinyToken (U_STRING,string(value))
-    function TinyToken(::AsLatin{true},s::AbstractString)
-    end
-    function TinyToken(t::AbstractToken)
+    function TinyToken(::Unsafe, fields::Int64)
+        new (fields)
     end
 end
+
+
+
+"""
+UNSAFE !! lowlevel constructor for a token referencing some external buffer.
+
+This constructor is used internally and should not be called from
+application code - NO CHECKS AT ALL are performed, the resulting
+TinyToken might be invalid.
+
+Has explicit UInt parameters to reduce chances that someone uses it
+unintentionally.
+
+In application code, use TinyToken(category,offset,size,s<:AbstractString).
+"""
+
+function TinyToken(::Unsafe, category::UInt64, offset::UInt64, size::UInt64)
+    TinyToken (Unsafe, NOTTINY_BIT | category<<59 | (size&7)<<56 | (size>>3)<<32 | offset)
+end
+
+
+"""
+constructor for "tiny" string token from Utf8-encoded strings
+"""
+function TinyToken(cat::Unsigned, s::Union{AbstractToken,String,SubString{String})
+    @boundscheck checkcategory(cat)
+    size = ncodeunits(s)
+    @boundscheck checksize(size,7)
+    @inbounds TinyToken(UInt64(cat),s, UInt64(0),UInt64(size),s)
+end
+
+
+"""
+constructor for "tiny" string token
+"""
+function TinyToken(cat::Unsigned, s::Union{AbstractToken,String,SubString{String},
+                    UInt64 offset, UInt64 size)
+    @boundscheck checkcategory(cat)
+    size = ncodeunits(s)
+    @boundscheck checksize(size,7)
+    new (NOTTINY_BIT | cat<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
+end
+
+
+function TinyToken(cat::UInt8, s::String, offset::UInt64, size::Int)
+    @boundscheck checkcategory(cat)
+    msb = UInt64(cat)<<59 # most significant byte
+    if first >= last
+        return new(UInt64(cat)<<59) # empty string
+    end
+    @boundscheck checkbounds(s,first,last)
+    size = last-first
+    @boundscheck size < 8 || throw BoundsError("Size too large for TinyToken string constructor",size)
+    new(bits)
+end
+
+
+function TinyToken(c::Char)
+    bits ::UInt64 =
+      (Base.codelen(c)) << 56) |
+      ( <<59 |
+      Int64(reinterpret(UInt32, c)) << 24
+   new(bits)
+end
+
+"override default constructor to convert anything to a string token"
+TinyToken (value::Any) = TinyToken (U_STRING,string(value))
+function TinyToken(::AsLatin{true},s::AbstractString)
+end
+function TinyToken(t::AbstractToken)
+end
+
+
 
 """
     t?"shorttext"
@@ -227,7 +267,10 @@ macro td_str(s) = TinyToken(0xd,s)
 macro te_str(s) = TinyToken(0xe,s)
 macro tf_str(s) = TinyToken(0xf,s)
 
-
+"True, if code units are stored directly in TinyToken (no external buffer)"
+function checktiny (::Bool, t::TinyToken)
+    t.bits >=0
+end
 
 function offset(t::TinyToken)
     mask = ((reinterpret(Int64,t.bits)>>63) & (UInt64(1)<<32 -1) # 0 for direct CU, 0xffffffff else
@@ -264,7 +307,7 @@ category(t::TinyToken) = UInt8((t.bits>>59)&15)
 
 "throw an error if token references some buffer"
 function checktiny(t::TinyToken)
-    @boundscheck t.bits&NOTTINY_BIT >=0 || throw(ErrorException("TinyToken references unknown buffer: &t"))
+    @boundscheck checktiny(Bool,t)wowo || throw(ErrorException("TinyToken references unknown buffer: &t"))
 end
 
 "throw an error if token category is out of bounds"
