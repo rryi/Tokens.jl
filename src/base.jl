@@ -17,6 +17,9 @@ for a concrete example.
 Every implementation must use Utf8 encoding: token methods operate
 mostly on Utf8 code units and rely on its properties.
 
+In addition to string concatenation, concatenation with a code unit
+(of type UInt8) must be implemented.
+
 # implementations in this module
 
 This module supplies a very memory efficient implementation
@@ -39,6 +42,8 @@ a category field.
 abstract type AbstractToken <: AbstractString
 end
 
+"These string types have methods operating with Utf8 code units"
+const Utf8String = Union(String,SubString{String},AbstractToken)
 
 ""
 struct SizeOffset
@@ -125,8 +130,8 @@ const L_INT :: UInt8 = 13
 "all characters up to but excluding a termination sequence"
 const L_SEQ3 :: UInt8 = 14
 
-"all characters up to but excluding a termination sequence"
-const L_SEQ4 :: UInt8 = 15
+"end-of-data, can be used as *missing* and *nothing* encoding"
+const L_EOD :: UInt8 = 15
 
 
 """

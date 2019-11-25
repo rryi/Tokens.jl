@@ -4,13 +4,13 @@
 const MAX_TINY_SIZE = 7
 
 "bitmask to check if any inline code unit is not ascii"
-const NOTASCII_BITS :: Int64 = 0x10000000100000001000000010000000100000001000000010000000
+const NOTASCII_BITS :: UInt64 = 0x10000000100000001000000010000000100000001000000010000000
 
 "bitmask to restrict to all code units"
-const CODEUNIT_BITS :: Int64 = (Int64(1)<<56)-1
+const CODEUNIT_BITS :: UInt64 = (UInt64(1)<<56)-1
 
 "bitmask to test for tiny. Bit set -> (offset,size) pair stored"
-const NOTTINY_BIT :: Int64 = (Int64(1)<<63)
+const NOTTINY_BIT :: UInt64 = (UInt64(1)<<63)
 
 
 "marker type to tag constructors as unsafe"
@@ -154,7 +154,7 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
 
 """
 struct TinyToken <: AbstractToken
-    bits::Int64
+    bits::UInt64
     """
     UNSAFE !! lowlevel constructor for a token referencing some external buffer.
 
@@ -163,11 +163,10 @@ struct TinyToken <: AbstractToken
     TinyToken might be invalid. The field parameter contains several
     data fields packed into 8 bytes on bit level.
     """
-    function TinyToken(::Unsafe, fields::Int64)
-        new (fields)
+    function TinyToken(::Unsafe, fields::Union{UInt64,Int64})
+        new (reinterpret(UInt64,fields))
     end
 end
-
 
 
 """
@@ -182,14 +181,15 @@ unintentionally.
 
 In application code, use TinyToken(category,offset,size,s<:AbstractString).
 """
-
 function TinyToken(::Unsafe, category::UInt64, offset::UInt64, size::UInt64)
     TinyToken (Unsafe, NOTTINY_BIT | category<<59 | (size&7)<<56 | (size>>3)<<32 | offset)
 end
 
 
 """
-constructor for "tiny" string token from Utf8-encoded strings
+constructor for direct encoding from Utf8-encoded strings.
+
+bounds checks: valid cat, ncodunits(s)<=7
 """
 function TinyToken(cat::Unsigned, s::Union{AbstractToken,String,SubString{String})
     @boundscheck checkcategory(cat)
@@ -200,14 +200,30 @@ end
 
 
 """
-constructor for "tiny" string token
+constructor for empty tiny token with direct data
 """
-function TinyToken(cat::Unsigned, s::Union{AbstractToken,String,SubString{String},
-                    UInt64 offset, UInt64 size)
+function TinyToken(cat::UInt64)
+    @boundscheck checkcategory(cat)
+    new(cat<<59)
+end
+
+
+
+"""
+constructor for direct encoding from Utf8-encoded strings.
+
+bounds checks: valid cat, size<=7, offset+size<=ncodeunits(s)
+"""
+function TinyToken(cat::Unsigned, offset::UInt64, size::UInt64, s::Utf8String)
     @boundscheck checkcategory(cat)
     size = ncodeunits(s)
     @boundscheck checksize(size,7)
-    new (NOTTINY_BIT | cat<<59) | (size&7)<<56 | (size>>3)<<32 | offset)
+    @boundscheck size==0 || checkbounds(s, offset+size)
+    t = TinyToken(UInt64(cat))
+    for i in 1::size
+        @inbounds t = t * codeunit(s,offset+i)
+    end
+    t
 end
 
 
@@ -224,21 +240,48 @@ function TinyToken(cat::UInt8, s::String, offset::UInt64, size::Int)
 end
 
 
-function TinyToken(c::Char)
-    bits ::UInt64 =
-      (Base.codelen(c)) << 56) |
-      ( <<59 |
-      Int64(reinterpret(UInt32, c)) << 24
-   new(bits)
+function TinyToken(cat::UInt8, c::Char)
+    @boundscheck checkcategory(cat)
+    TinyToken(Unsafe, UInt64(cat<<3 | Base.codelen(c)) << 56
+        |  UInt64(reinterpret(UInt32, c)) << 24)
 end
 
-"override default constructor to convert anything to a string token"
-TinyToken (value::Any) = TinyToken (U_STRING,string(value))
-function TinyToken(::AsLatin{true},s::AbstractString)
-end
-function TinyToken(t::AbstractToken)
+
+"set a codeunit within a bitfield assuming current value is 0. No checks."
+unsafe_set(bits::UInt64, index, codeunit::Uint8) =
+    bits | ( UInt64(codeunit)<< ((7-index)<<3)
+
+"set a codeunit within a TinyToken assuming current value is 0. No checks."
+unsafe_set(t::TinyToken, index, codeunit::Uint8) =
+     TinyToken(Unsafe, unsafe_set(t.bits, index, codeunit))
+
+"""
+    *(t::TinyToken, s::Union{UInt8,Char,AbstractString)
+
+concatenation has to be supported. category is always copied from base
+token (first argument). code units are allowed to be concatenated, this
+can result in tokens representing an invalid Utf8 code unit sequence.
+
+Every token implementation must supply UInt8 (code unit) concatenation,
+other concatenation arguments have a default implementation using
+code unit concatenation
+"""
+function (*)(t::TinyToken, s::Utf8String)
+
+
 end
 
+function (*)(t::TinyToken, c::Char)
+
+
+end
+
+
+function (*)(t::TinyToken, cu::UInt8)
+    @boundscheck checkappend(t,1)
+    unsafe_set (append(t,1))
+
+end
 
 
 """
@@ -267,10 +310,7 @@ macro td_str(s) = TinyToken(0xd,s)
 macro te_str(s) = TinyToken(0xe,s)
 macro tf_str(s) = TinyToken(0xf,s)
 
-"True, if code units are stored directly in TinyToken (no external buffer)"
-function checktiny (::Bool, t::TinyToken)
-    t.bits >=0
-end
+
 
 function offset(t::TinyToken)
     mask = ((reinterpret(Int64,t.bits)>>63) & (UInt64(1)<<32 -1) # 0 for direct CU, 0xffffffff else
@@ -285,7 +325,7 @@ function Base.ncodeunits(t::TinyToken)
     # or 0 (bit 63 clear, all data in token, size is 0..7)
     # by arithmetic shift of bit 63. ANDing with t.bits and shift by 29 gives
     # the high bits 3..26 of the size.
-    masksize = (reinterpret(Int64,t.bits)>>31) & ((2^24-1)<<32) ## length bitfield mask
+    masksize = (reinterpret(Int64,t.bits)>>31) & ((1<<24-1)<<32) ## length bitfield mask
     ((t.bits &masksize)>>>29) | ((t.bits >>>56) & 7)
 end
 
@@ -303,11 +343,15 @@ end
 category(t::TinyToken) = UInt8((t.bits>>59)&15)
 
 
-
+"True, if code units are stored directly in TinyToken (no external buffer)"
+function checktiny (::Bool, t::TinyToken)
+    reinterpret(Int64,t.bits) >=0
+end
 
 "throw an error if token references some buffer"
 function checktiny(t::TinyToken)
-    @boundscheck checktiny(Bool,t)wowo || throw(ErrorException("TinyToken references unknown buffer: &t"))
+    @boundscheck checktiny(Bool,t) || throw(ErrorException("TinyToken references unknown buffer: &t"))
+    nothing
 end
 
 "throw an error if token category is out of bounds"
@@ -333,6 +377,13 @@ end
 "throw an error if token references some buffer"
 function checksize(size::Unsigned, maxsize=7))
     @boundscheck size <= maxsize || throw(ErrorException("too many code units: &size"))
+end
+
+
+"throw an error if token references some buffer"
+function checkappend(t::TinyToken,append))
+    @boundscheck checktiny(t)
+    @boundscheck ((t.bits>>56 & 7) + append <=7) || throw(ErrorException("no &append bytes left in tinytoken: &t"))
 end
 
 
