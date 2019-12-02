@@ -204,7 +204,7 @@ constructor for empty tiny token with direct data
 """
 function TinyToken(cat::UInt64)
     @boundscheck checkcategory(cat)
-    new(cat<<59)
+    TinyToken(Unsafe,cat<<59)
 end
 
 
