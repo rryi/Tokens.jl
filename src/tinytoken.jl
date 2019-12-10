@@ -191,12 +191,19 @@ constructor for direct encoding from Utf8-encoded strings.
 
 bounds checks: valid cat, ncodunits(s)<=7
 """
-function TinyToken(cat::Unsigned, s::Union{AbstractToken,String,SubString{String})
+function TinyToken(cat::Unsigned, s::Utf8String)
     @boundscheck checkcategory(cat)
     size = ncodeunits(s)
     @boundscheck checksize(size,7)
-    @inbounds TinyToken(UInt64(cat),s, UInt64(0),UInt64(size),s)
+    @inbounds TinyToken(UInt64(cat), UInt64(0),UInt64(size),s)
 end
+
+
+TinyToken(cat::Unsigned, s::AbstractString) = TinyToken(cat,string(s))
+
+
+"subtoken with offset/size descriptor"
+function TinyToken(UInt64 offset, UInt64 size, t::AbstractToken)
 
 
 """
@@ -206,7 +213,6 @@ function TinyToken(cat::UInt64)
     @boundscheck checkcategory(cat)
     TinyToken(Unsafe,cat<<59)
 end
-
 
 
 """
