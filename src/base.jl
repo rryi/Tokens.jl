@@ -1,3 +1,4 @@
+
 # basic type declarations and utilities
 
 # abstract type AbstractToken{C} where {C<:Integer} <: AbstractString
@@ -45,11 +46,6 @@ end
 "These string types have methods operating with Utf8 code units"
 const Utf8String = Union(String,SubString{String},AbstractToken)
 
-""
-struct SizeOffset
-    size :: UInt32
-    offset :: UInt32
-end
 
 #########################################################
 ################# AbstractToken API #####################
@@ -71,10 +67,10 @@ function offset end
 
 
 """
-    category(t::AbstractToken) :: TokenCategory
+    category(t::AbstractToken) :: UInt8
 
 Current category of given token. A value in 0:15.
-Meaning depends on context. [`Lexer`](@ref. uses
+Meaning depends on context. [`Lexer`](@ref) uses
 the meaning defined in the following constants beginning with "L_"
 
 """
@@ -84,21 +80,32 @@ function category end
 ################ common category labels  #####################
 
 
-"Default category: a string without defined syntactic meaning"
-const L_STRING :: UInt8 = 0
+
+
+
+"Default category: a string without associated syntactic meaning"
+const C_STRING :: UInt8 = 0
 
 "whitespace sequence"
-const L_WHITE :: UInt8 = 1
+const C_WHITE :: UInt8 = 1
 
-
-"Special character like % ! but no recognized symbol or escape character"
-const L_SPECIAL :: UInt8 = 2
-
-"string enclosed in quotes"
-const L_QUOTED :: UInt8 = 3
 
 "Identifier, usually a letter/digit sequence"
-const L_IDENT :: UInt8 = 4
+const C_IDENT :: UInt8 = 4
+
+
+"Sequence of digits, may have leading sign"
+const C_INT :: UInt8 = 13
+
+
+"Special character (no letter, digit, white) not recognized as symbol or escape"
+const L_SPECIAL :: UInt8 = 2
+
+"string enclosed in double quotes"
+const C_QUOTED :: UInt8 = 3
+
+"string enclosed in single quotes"
+const C_CHAR :: UInt8 = 11
 
 "A optionally signed number with a decimal separator and/or decimal exponent"
 const L_FLOAT :: UInt8 = 5
@@ -109,7 +116,7 @@ const L_SEQ1 :: UInt8 = 6
 "all characters up to but excluding a termination sequence"
 const L_SEQ2 :: UInt8 = 7
 
-"A comment, including termination sequences"
+"A comment. token value may include comment escapes, depending on parser"
 const L_COMMENT :: UInt8 = 8
 
 "End of line sequence, 1 or 2 characters"
@@ -117,9 +124,6 @@ const L_EOL :: UInt8 = 9
 
 "A symbol, a special character sequence "
 const L_SYMBOL :: UInt8 = 10
-
-"string enclosed in single quotes, in many applications a single character"
-const L_CHAR :: UInt8 = 11
 
 "identifier recognized as keyword"
 const L_KEY :: UInt8 = 12

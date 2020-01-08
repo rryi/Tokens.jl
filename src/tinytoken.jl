@@ -17,6 +17,11 @@ const NOTTINY_BIT :: UInt64 = (UInt64(1)<<63)
 struct Unsafe end
 
 
+
+"Known standard types usable in reinterpret for 64 bit types"
+const Bits64 = union {UInt64, Int64}
+
+
 """
 Flyweight string with an associated token category.
 
@@ -153,20 +158,21 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
 
 
 """
-struct TinyToken <: AbstractToken
-    bits::UInt64
-    """
-    UNSAFE !! lowlevel constructor for a token referencing some external buffer.
+primitive type TinyToken <: AbstractToken 64 end
 
-    This constructor is used internally and should not be called from
-    application code - NO CHECKS AT ALL are performed, the resulting
-    TinyToken might be invalid. The field parameter contains several
-    data fields packed into 8 bytes on bit level.
-    """
-    function TinyToken(::Unsafe, fields::Union{UInt64,Int64})
-        new (reinterpret(UInt64,fields))
-    end
+
+"""
+UNSAFE !! lowlevel constructor from any 64bit value.
+
+This constructor is used internally and should not be called from
+application code - NO CHECKS AT ALL are performed, the resulting
+TinyToken might be invalid. The field parameter contains several
+data fields packed into 8 bytes on bit level.
+"""
+function TinyToken(::Unsafe, bits::Bits64})
+    reinterpret(TinyToken,bits)
 end
+
 
 
 """
@@ -175,6 +181,7 @@ UNSAFE !! lowlevel constructor for a token referencing some external buffer.
 This constructor is used internally and should not be called from
 application code - NO CHECKS AT ALL are performed, the resulting
 TinyToken might be invalid.
+
 
 Has explicit UInt parameters to reduce chances that someone uses it
 unintentionally.
@@ -189,13 +196,13 @@ end
 """
 constructor for direct encoding from Utf8-encoded strings.
 
-bounds checks: valid cat, ncodunits(s)<=7
+bounds checks: valid cat, ncodeunits(s)<=7
 """
-function TinyToken(cat::Unsigned, s::Utf8String)
-    @boundscheck checkcategory(cat)
-    size = ncodeunits(s)
+function TinyToken(category::Unsigned, s::Utf8String)
+    @boundscheck checkcategory(category)
+    size = UInt64(ncodeunits(s))
     @boundscheck checksize(size,7)
-    @inbounds TinyToken(UInt64(cat), UInt64(0),UInt64(size),s)
+    @inbounds TinyToken(category, UInt64(0),size,s)
 end
 
 
@@ -203,15 +210,19 @@ TinyToken(cat::Unsigned, s::AbstractString) = TinyToken(cat,string(s))
 
 
 "subtoken with offset/size descriptor"
-function TinyToken(UInt64 offset, UInt64 size, t::AbstractToken)
+TinyToken(offset::Unsigned, size::Unsigned, t::AbstractToken) = TinyToken(
+    category(t),offset,size,t)
+)
+
+
 
 
 """
 constructor for empty tiny token with direct data
 """
-function TinyToken(cat::UInt64)
+function TinyToken(cat::Unsigned)
     @boundscheck checkcategory(cat)
-    TinyToken(Unsafe,cat<<59)
+    TinyToken(Unsafe,UInt64(cat)<<59)
 end
 
 
@@ -220,11 +231,12 @@ constructor for direct encoding from Utf8-encoded strings.
 
 bounds checks: valid cat, size<=7, offset+size<=ncodeunits(s)
 """
-function TinyToken(cat::Unsigned, offset::UInt64, size::UInt64, s::Utf8String)
+function TinyToken(cat::Unsigned, offset::Unsigned, size::Unsigned, s::Utf8String)
     @boundscheck checkcategory(cat)
     size = ncodeunits(s)
     @boundscheck checksize(size,7)
     @boundscheck size==0 || checkbounds(s, offset+size)
+    tt::UInt64 =
     t = TinyToken(UInt64(cat))
     for i in 1::size
         @inbounds t = t * codeunit(s,offset+i)
