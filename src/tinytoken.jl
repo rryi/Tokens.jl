@@ -188,7 +188,7 @@ unintentionally.
 
 In application code, use TinyToken(category,offset,size,s<:AbstractString).
 """
-function TinyToken(::Unsafe, category::UInt64, offset::UInt64, size::UInt64)
+function TinyToken(::Unsafe, category::Bits64, offset::Bits64, size::Bits64)
     TinyToken (Unsafe, NOTTINY_BIT | category<<59 | (size&7)<<56 | (size>>3)<<32 | offset)
 end
 

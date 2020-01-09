@@ -128,8 +128,6 @@ const L_SYMBOL :: UInt8 = 10
 "identifier recognized as keyword"
 const L_KEY :: UInt8 = 12
 
-"Sequence of digits with optional leading sign"
-const L_INT :: UInt8 = 13
 
 "all characters up to but excluding a termination sequence"
 const L_SEQ3 :: UInt8 = 14
