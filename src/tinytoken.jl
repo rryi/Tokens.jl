@@ -3,6 +3,9 @@
 "maximal count of code units directly encoded in a TinyToken"
 const MAX_TINY_SIZE = 7
 
+"maximal count of code units in any Token"
+const MAX_TOKEN_SIZE = (SIZE_BITS_27 ? (1<<27) : (1<<24) ) - 1
+
 "bitmask to check if any inline code unit is not ascii"
 const NOTASCII_BITS :: UInt64 = 0x10000000100000001000000010000000100000001000000010000000
 
@@ -22,125 +25,72 @@ struct Unsafe end
 const Bits64 = union {UInt64, Int64}
 
 
+
 """
-Flyweight string with an associated token category.
+Flyweight token with direct encoding of its code units.
 
 This string data type directly stores very short strings with a length
-of up to 7 code units. It supports the AbstractString API and can be
+of up to 7 code units in its value. It supports the AbstractString API and can be
 used as a memory efficient substitute for String instances, avoiding
 any pointer overhead.
 
-Combined with a code unit buffer, it can hold strings of a length below
-2**27. The flyweight value encodes an offset and a length, in this case.
-
-TinyToken can be used directly in application code if its length limit
-fits the use case. More common is a combination with an additional code unit
-buffer. The TinyToken bits pattern is interpreted differently, in this
-case, as an offset (32bit) and a length (27bit).
-
-See [`Token`](@ref) and [`MutableToken`](@ref) for an implementation.
-
-# methods without code unit buffer parameter
-
-Strings with up to 7 Utf8 code units can be stored in one TinyToken
-instance, without an additional buffer. For most functions using a TinyToken,
-there is a method with a TinyToken parameter but no code unit buffer parameter.
-There are two reasons why a code unit buffer parameter is not present:
-
-(a) Function does not access code units, like *ncodeunits* or *category*.
-
-(b) Function needs code unit access, but an optimized method for short strings
-stored directly in the TinyToken instance is supplied.
-
-In case (b) checks have to be implemented that grant:
-
-  * TinyToken input parameters have stored its code units directly. Please take
-    into account, that a number of code units below 8 does not imply that those
-    code units are stored directly. You have to check is not sufficient a TinyToken with less than 8 code units can cana length below 8 up to 7 does is not necessarily
-    stored directlycan
-
-  * TinyToken results returned without a code unit buffer store its code units
-    directly.
-
-Those checks are annoted with *@boundscheck*. This allows for efficient
-operation when it is known in advance that the whole operation can be carried
-out on TinyToken-s without external code unit buffer, by annotating the calls
-with *@inbounds*.
-
-the operation
-
-  It is an optimized version Those methods should
-
- Size limit is checked unless you
-annotate the call with @inbounds.
-
-# use with buffer
-
-
-
-# warning on @inbounds usage
-
-Methods that have a TinyToken parameter, need access to its code units,
-but have no associated code unit buffer as a parameter, will check if
-code units are stored as part of the supplied token. If not, they will
-throw a BoundsError.
-
-This check is annotated with @boundscheck, so it is probably skipped
-if the method is called in an @inbounds block.
-
-Code annotated with @inbounds assures not only that all used indices are in
-bounds. It additionally assures that all code units are directly stored
-in the TinyToken instance for all method calls with a TinyToken parameter
-which is not accompanied by a code unit buffer parameter.
-
 # implementation details
 
-There are two variants of TinyToken, that one with directly encoded dode units,
-and that one referencing an external buffer. The Julia-typical way for an
-implementation would be to declare these variants as different types and to
-define TinyToken as a union of these variants. The price would be to have one
-additional byte per instance for the union overhead. Instead, the variants
-are managed internally by the functions working with TinyToken, and type
-implementation details are marked as private and hidden to the extend possible
-with Julia.
+Design goal is to treat a TinyToken instance as a 64 bit primitive value.
+To allow bit operations, memory layout is in host endianness like Int64.
+Take that into account on binary serialization.
+The sign bit (most significant bit) is used to distinguish a DirectToken
+value from other TinyToken types. For a TinyToken, it must always be 0.
 
-Design goal is to keep an TinyToken instance in one 64bit value.
-Memory layout is 8 bytes, RAM representation is an Int64 in host format.
-The sign bit (most significant bit) is used to distinguish the two TinyToken
-variants.
-
-If the sign bit is clear, we have a really tiny string of
-up to 7 code units, directly encoded in the TinyToken value in its
-bytes 6 down to 0. If size is less than 7, unused code units must be 0.
+DirectToken encodes really tiny strings of up to 7 code units, directly
+in its 64 bit value. If size is less than 7, unused code units must be 0.
 
 The memory layout is similar to the julia memory layout for the Char type,
-with the difference that the code unit count is explicitly stored in one byte,
-together with category and the "tiny flag".
+with the difference that the code unit count is explicitly stored in a separate
+byte, together with category and the "isdirect flag" in the sign bit.
 
 Order is chosen in a way that a lexikographically correct string compare
-for TinyToken-s can be done with one single UInt64 compare operation.
+for DirectToken-s can be done with one single UInt64 compare operation.
 
 Memory layout:
 
 ```
 bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
-    =0 =========== ========
+    == =========== ========
     |  |           |        |     |     |     |     |     |     |
     |  |           |        cu[1] cu[2] cu[3] cu[4] cu[5] cu[6] cu[7]
     |  |           size: 0..7
     |  category: 0..15
     |
-    =0: really tiny, 0..7 code units stored directly in byte 6..1
+    =0: marker flag must be 0 in DirectToken instances
 ```
 
-If the most significant bit is set, we have a usually larger string of
-up to 2^27-1 code units, encoded elsewere in an external code unit buffer.
-The TinyToken value stores offset and size information in byte 0..6.
 
-Treatment of the external code unit buffer needs some attention: it is NOT
-part of the TinyToken type. Instead, methods operating on TinyToken-s code
-units need some buffer supply by its context, usually via an additional
-parameter or a closure. Missing buffer information will cause an exception.
+"""
+primitive type DirectToken <: TinyToken 64 end
+
+
+
+
+"""
+Flyweight token accomplished by a code unit buffer.
+
+This token type is a flyweight data structure which needs an accompanying
+code unit buffer. In methods, it is either supplied as an additional parameter,
+or it is known from the context.
+
+See [`Token`](@ref) and [`MutableToken`](@ref) for an implementation
+with explicitly associated buffer.
+
+# methods without code unit buffer parameter
+
+There are two reasons why a code unit buffer parameter is not present:
+
+(a) function does not access code units, like *ncodeunits*, *category*
+or *isdirect*.
+
+(b) function needs code unit access, and knows the buffer from its context.
+
 
 Memory layout:
 
@@ -153,25 +103,115 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
     |  |           size&7: lowest 3 bits
     |  category: 0..15
     |
-    =1: code units stored in buffer[1+offset] .. buffer[1+offset+size]
+    =1: must be 1 for any BufferToken instance.
+    code units are stored in buffer[offset+1] .. buffer[offset+size]
+    buffer must be known in the processing context.
 ```
 
 
 """
-primitive type TinyToken <: AbstractToken 64 end
+primitive type BufferToken <: TinyToken 64 end
+
 
 
 """
-UNSAFE !! lowlevel constructor from any 64bit value.
+Flyweight token union type.
 
-This constructor is used internally and should not be called from
-application code - NO CHECKS AT ALL are performed, the resulting
-TinyToken might be invalid. The field parameter contains several
-data fields packed into 8 bytes on bit level.
+This token type is an alternative implementation for the julia
+construct *union {DirectToken, BufferToken}*.
+
+The sign bit in the 64-bit value (interpreted as UInt64) distinguishes
+between the two types that make up the union, instead of a separate
+tag byte which would be used by a Julia union construct.
+
+The type acts as a DirectToken or a BufferToken depending on its value,
+which is tested at runtime, introducing the overhead of one test and
+conditional jump on access. Because caller do not know in advance
+(at compiletime) if an instance is of type BufferToken, the buffer needed
+by a BufferToken has to be supplied in the processing context and is
+unused if the concrete instance is a DirectToken.
+
+The advantage over BufferToken is less memory consumption, and faster
+access to code units because no indirection takes place, if the actual
+instance is a DirectToken.
+
+Use HypridToken instead of BufferToken in cases where strings with up to
+7 code units have a significant proportion. Benchmark both alternatives
+if runtime performance is critical - it depends on your operation mix
+whether HybridToken gives faster code or not.
+
+[`Token`](@ref) and [`TokenVector`](@ref) are specialized on HybridToken,
+variants see its definition for variants with BufferToken.
+
+# methods without code unit buffer parameter
+
+For many functions using a HybridToken, there is a method with a HybridToken
+parameter but no code unit buffer parameter.
+There are several reasons why a code unit buffer parameter is not present:
+
+(a) function does not access code units, like *ncodeunits*, *category*
+or *isdirect*.
+
+(b) function needs code unit access, but knows where its buffer is, from
+some context information
+
+(c) function needs code unit access and fails if the HybridToken is not a
+DirectToken
+
+# warning on @inbounds usage
+
+Methods that have a HybridToken parameter, need access to its code units,
+but have no associated code unit buffer as a parameter, will check if
+code units are stored directly in the supplied token. If not, they will
+throw a BoundsError.
+
+Those type checks are annoted with *@boundscheck*. This allows for efficient
+operation when it is known in advance that the whole operation can be carried
+out on HybridToken-s without external code unit buffer, by annotating the calls
+with *@inbounds*.
+
+Code annotated with @inbounds assures not only that all used indices are in
+bounds. It additionally assures that all code units are directly stored
+in the HybridToken instance for all method calls with a HybridToken parameter
+which is not accompanied by a code unit buffer parameter.
+
+# implementation details
+
+Because all values of DirectToken and BufferToken, seen as native 64-bit-chunk,
+are not overlapping, the concrete type of a HybridToken is easily determined
+at runtime (test the sign bit in Int64 interpretation).
+
+ncodeunits can be implemented without conditional jumps, by tricky bit
+operations. This is left to llvm optimization - benchmarks have shown that
+llvm is capable of doing it and decides on code generation which implementation
+is regarded faster.
+
+category bits are identical for DirectToken and BufferToken, so no conditional
+code is needed.
+
 """
-function TinyToken(::Unsafe, bits::Bits64})
-    reinterpret(TinyToken,bits)
-end
+primitive type HybridToken <: TinyToken 64 end
+
+
+
+
+"""
+Private unsafe convenience converter to an UInt64 value.
+
+All TinyToken operations are finally implemented with native 64 bit
+operations defined for Int64 or UInt 64. We need a short notation
+to convert between (U)Int64 and TinyToken. No checks!!
+"""
+uint(t::TinyToken) =  reinterpret(UInt64,t)
+
+"""
+Private unsafe convenience converter to an UInt64 value.
+
+All TinyToken operations are finally implemented with native 64 bit
+operations defined for Int64 or UInt 64. We need a short notation
+to convert between (U)Int64 and TinyToken. No checks!!
+"""
+tt(bits::Bits64) = reinterpret(TinyToken,bits)
 
 
 
@@ -182,21 +222,31 @@ This constructor is used internally and should not be called from
 application code - NO CHECKS AT ALL are performed, the resulting
 TinyToken might be invalid.
 
-
-Has explicit UInt parameters to reduce chances that someone uses it
-unintentionally.
-
 In application code, use TinyToken(category,offset,size,s<:AbstractString).
 """
-function TinyToken(::Unsafe, category::Bits64, offset::Bits64, size::Bits64)
-    TinyToken (Unsafe, NOTTINY_BIT | category<<59 | (size&7)<<56 | (size>>3)<<32 | offset)
+function TinyToken(::Unsafe, category::UInt64, offset::UInt64, size::UInt64)
+    tt(NOTTINY_BIT | category<<59 | (size&7)<<56 | (size>>3)<<32 | offset)
+end
+
+
+"""
+UNSAFE !! lowlevel constructor for a token with direct encoding
+
+This constructor is used internally and should not be called from
+application code - NO CHECKS AT ALL are performed, the resulting
+TinyToken might be invalid.
+
+In application code, use TinyToken(category,s::Utf8String).
+"""
+function TinyToken(::Unsafe, category::UInt64, size)
+    tt( category<<59 | UInt64(size&7)<<56)
 end
 
 
 """
 constructor for direct encoding from Utf8-encoded strings.
 
-bounds checks: valid cat, ncodeunits(s)<=7
+bounds checks: valid category, ncodeunits(s)<=7
 """
 function TinyToken(category::Unsigned, s::Utf8String)
     @boundscheck checkcategory(category)
@@ -222,7 +272,7 @@ constructor for empty tiny token with direct data
 """
 function TinyToken(cat::Unsigned)
     @boundscheck checkcategory(cat)
-    TinyToken(Unsafe,UInt64(cat)<<59)
+    reinterpret(TinyToken,UInt64(cat)<<59)
 end
 
 
@@ -266,8 +316,8 @@ end
 
 
 "set a codeunit within a bitfield assuming current value is 0. No checks."
-unsafe_set(bits::UInt64, index, codeunit::Uint8) =
-    bits | ( UInt64(codeunit)<< ((7-index)<<3)
+unsafe_set(t:TinyToken, index, codeunit::Uint8) =
+    reinterpret(TinyToken, uint(t) | ( UInt64(codeunit)<< ((7-index)<<3)
 
 "set a codeunit within a TinyToken assuming current value is 0. No checks."
 unsafe_set(t::TinyToken, index, codeunit::Uint8) =
@@ -343,8 +393,8 @@ function Base.ncodeunits(t::TinyToken)
     # or 0 (bit 63 clear, all data in token, size is 0..7)
     # by arithmetic shift of bit 63. ANDing with t.bits and shift by 29 gives
     # the high bits 3..26 of the size.
-    masksize = (reinterpret(Int64,t.bits)>>31) & ((1<<24-1)<<32) ## length bitfield mask
-    ((t.bits &masksize)>>>29) | ((t.bits >>>56) & 7)
+    masksize = (reinterpret(Int64,t)>>31) & ((1<<24-1)<<32)
+    ((reinterpret(Int64,t)&masksize)>>>29) | ((reinterpret(Int64,t) >>>56) & 7)
 end
 
 

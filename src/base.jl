@@ -39,9 +39,28 @@ For convenience,  [`Token`](@ref) bundles a TinyToken with a buffer.
 Token is quite similar to [`SubString`](@ref), but can operate on short
 strings without buffer access, and reduces maximal length in favor of
 a category field.
+
+[`MutableToken`](@ref) implements safe content changes without buffer
+reallocation. It tracks references to its buffer, changes in a buffer
+segment referenced elsewere cause buffer reallocation. Its logic is
+also used in [`TokenVector`](@ref) which implements a string array
+using one common buffer
+
+
 """
 abstract type AbstractToken <: AbstractString
 end
+
+"""
+A flyweight data structure for an immutable Token.
+
+All subtypes must be 64 bit primitive data types which implement a certain
+bitmap layout and conventions for processing it. 
+
+"""
+abstract type TinyToken <: AbstractToken
+
+
 
 "These string types have methods operating with Utf8 code units"
 const Utf8String = Union(String,SubString{String},AbstractToken)
@@ -71,7 +90,7 @@ function offset end
 
 Current category of given token. A value in 0:15.
 Meaning depends on context. [`Lexer`](@ref) uses
-the meaning defined in the following constants beginning with "L_"
+the meaning defined in the following constants beginning with "T_"
 
 """
 function category end
@@ -79,61 +98,82 @@ function category end
 
 ################ common category labels  #####################
 
+# treatment of nonascii characters is parser specific, but any parser
+# must keep characters within one token.
 
+# token categories which grant direct encoding in TinyToken may be normalized,
+# i.e. parser may replace parsed text with some normalized representation
+# which ensures uniqueness fpr a semantic meaning. E.g. "<>", "≠", "/neq" and
+# "!=" could all be represented by a symbol with string "!=".
 
-
-
-"Default category: a string without associated syntactic meaning"
-const C_STRING :: UInt8 = 0
+# group (1): token category determined by 1st codeunit,
+# token contains all following codeunits belonging to
+# a codeunit set associated with that category.
 
 "whitespace sequence"
-const C_WHITE :: UInt8 = 1
-
+const T_WHITE = UInt64(0)
 
 "Identifier, usually a letter/digit sequence"
-const C_IDENT :: UInt8 = 4
+const T_IDENT = UInt64(1)
 
+"Special character sequence, no known semantic (no letter, digit, white, symbol)"
+const T_SPECIAL = UInt64(2)
 
 "Sequence of digits, may have leading sign"
-const C_INT :: UInt8 = 13
+const T_INT = UInt64(3)
 
-
-"Special character (no letter, digit, white) not recognized as symbol or escape"
-const L_SPECIAL :: UInt8 = 2
+# group (2): token category determined by 1st byte,
+# token contains all following bytes until termination byte is
+# found, typically the 1st byte again.
+# Parser may implement some way to include
+# 1st byte in token, by an escape prefix byte or by
+# doubling 1st byte.
 
 "string enclosed in double quotes"
-const C_QUOTED :: UInt8 = 3
+const T_QUOTED = UInt64(4)
 
-"string enclosed in single quotes"
-const C_CHAR :: UInt8 = 11
+"string enclosed in single quotes, typically a TinyToken (one character)"
+const T_CHAR = UInt64(5)
 
-"A optionally signed number with a decimal separator and/or decimal exponent"
-const L_FLOAT :: UInt8 = 5
+# group (3): token category determined by 1st byte,
+# individual rules for consuming more bytes into token
 
-"all characters up to but excluding a termination sequence"
-const L_SEQ1 :: UInt8 = 6
+"symbol (special characters with semantic meaning), typically a TinyToken"
+const T_SYMBOL = UInt64(6)
 
-"all characters up to but excluding a termination sequence"
-const L_SEQ2 :: UInt8 = 7
-
-"A comment. token value may include comment escapes, depending on parser"
-const L_COMMENT :: UInt8 = 8
-
-"End of line sequence, 1 or 2 characters"
-const L_EOL :: UInt8 = 9
-
-"A symbol, a special character sequence "
-const L_SYMBOL :: UInt8 = 10
-
-"identifier recognized as keyword"
-const L_KEY :: UInt8 = 12
+"End of line sequence, 1 or 2 characters, typically a TinyToken"
+const T_EOL = UInt64(7)
 
 
-"all characters up to but excluding a termination sequence"
-const L_SEQ3 :: UInt8 = 14
+# group (4): tokens which specialize or extend tokens from group 1-3
 
-"end-of-data, can be used as *missing* and *nothing* encoding"
-const L_EOD :: UInt8 = 15
+"identifier recognized as keyword, typically a TinyToken"
+const T_KEY = UInt64(8)
+
+"An optionally signed number with a decimal separator and/or decimal exponent"
+const T_FLOAT = UInt64(9)
+
+"comment, pure comment text. Delimiters accessible via lexer context"
+const T_COMMENT = UInt64(10)
+
+# group (5): categories for parsers and TokenTree, not lexically deducted
+# lexer can use these categories for text which is enclosed by a prefix
+# symbol and a suffix symbol and is not lexically analyzed
+
+"end-of-data, marks subtree end in TokenTree, lexer: end of data / nothing"
+const T_EOD = UInt64(11)
+
+"Default category: some text, no lexical analysis performed"
+const T_TEXT = UInt64(12)
+
+"processing instruction: nonleaf AST node, lexer: symbol-delimited char sequence"
+const T_PI = UInt64(13)
+
+"structure: nonleaf AST node, lexer: symbol-delimited char sequence"
+const T_STRUCT = UInt64(14)
+
+"sequence: nonleaf AST node, lexer: symbol-delimited char sequence"
+const T_SEQ = UInt64(15)
 
 
 """
