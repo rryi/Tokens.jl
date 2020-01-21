@@ -24,6 +24,15 @@ struct Unsafe end
 "Known standard types usable in reinterpret for 64 bit types"
 const Bits64 = union {UInt64, Int64}
 
+"""
+A flyweight data structure for an immutable Token.
+
+All subtypes must be 64 bit primitive data types which implement a certain
+bitmap layout and conventions for processing it.
+
+"""
+abstract type TinyToken <: AbstractToken
+
 
 
 """
@@ -211,9 +220,25 @@ All TinyToken operations are finally implemented with native 64 bit
 operations defined for Int64 or UInt 64. We need a short notation
 to convert between (U)Int64 and TinyToken. No checks!!
 """
-tt(bits::Bits64) = reinterpret(TinyToken,bits)
+dt(bits) = reinterpret(DirectToken,bits)
 
+"""
+Private unsafe convenience converter to an UInt64 value.
 
+All TinyToken operations are finally implemented with native 64 bit
+operations defined for Int64 or UInt 64. We need a short notation
+to convert between (U)Int64 and TinyToken. No checks!!
+"""
+ht(bits) = reinterpret(HybridToken,bits)
+
+"""
+Private unsafe convenience converter to an UInt64 value.
+
+All TinyToken operations are finally implemented with native 64 bit
+operations defined for Int64 or UInt 64. We need a short notation
+to convert between (U)Int64 and TinyToken. No checks!!
+"""
+bt(bits) = reinterpret(BufferToken,bits)
 
 """
 UNSAFE !! lowlevel constructor for a token referencing some external buffer.
@@ -224,8 +249,8 @@ TinyToken might be invalid.
 
 In application code, use TinyToken(category,offset,size,s<:AbstractString).
 """
-function TinyToken(::Unsafe, category::UInt64, offset::UInt64, size::UInt64)
-    tt(NOTTINY_BIT | category<<59 | (size&7)<<56 | (size>>3)<<32 | offset)
+function BufferToken(::Unsafe, category::UInt64, offset::UInt64, size::UInt64)
+    bt(NOTTINY_BIT | category<<59 | (size&7)<<56 | (size>>3)<<32 | offset)
 end
 
 
@@ -272,7 +297,7 @@ constructor for empty tiny token with direct data
 """
 function TinyToken(cat::Unsigned)
     @boundscheck checkcategory(cat)
-    reinterpret(TinyToken,UInt64(cat)<<59)
+    reinterpret(TinyToken,UInt64(cat)<<59)ä
 end
 
 

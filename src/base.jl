@@ -51,15 +51,6 @@ using one common buffer
 abstract type AbstractToken <: AbstractString
 end
 
-"""
-A flyweight data structure for an immutable Token.
-
-All subtypes must be 64 bit primitive data types which implement a certain
-bitmap layout and conventions for processing it. 
-
-"""
-abstract type TinyToken <: AbstractToken
-
 
 
 "These string types have methods operating with Utf8 code units"
@@ -86,7 +77,7 @@ function offset end
 
 
 """
-    category(t::AbstractToken) :: UInt8
+    category(t::AbstractToken) :: TCategory
 
 Current category of given token. A value in 0:15.
 Meaning depends on context. [`Lexer`](@ref) uses
@@ -94,6 +85,210 @@ the meaning defined in the following constants beginning with "T_"
 
 """
 function category end
+
+"""
+Token category definitions
+
+# group (1): character sequences based on character classes
+
+## T_WHITE = 0
+
+A sequence of whitespace characters.
+May include end of line characters, if *T_EOL* is not used in a
+certain lexer context.
+
+## T_IDENT = 1
+
+An identifier in the lexer context.
+Typical rules are: 1st character is a letter, following characters are
+letters or digits. Some special characters like '_' or '$' could also
+appear in a T_IDENT token.
+
+## T_SPECIAL = 2
+
+A sequence of special characters, which are not used as delimiters of
+other lexical construct like quotes, and not recognized as symbol.
+
+## T_INT = 3
+
+A sequence of digits, may have leading sign. usually '+' or '-', but a lexer
+can recognize other characters as a sign, like '$'
+
+
+# group (2): lexer categories determined by 1st code unit
+
+## T_QUOTED = 4
+
+A string enclosed in double quotes '"'. Lexers will typically remove the leading
+and trailing quotes, and will not allow double quotes inside. However,
+there are lexer implementations which support some escape mechanism which
+allows putting double quotes in a quoted string.
+
+## T_CHAR = 5
+
+A string enclosed in single quotes. Some lexer will require exactly one
+character.
+
+## T_EOL = 6
+End of line sequence, 1 or 2 characters, typically a TinyToken.
+In a context where line breaks have no syntactical meaning, a lexer can
+treat end of line characters as whitespace and never report T_EOL.
+
+# group (3): tokens which specialize or extend tokens from group 1-3
+
+## T_FLOAT = 7
+
+An optionally signed number with a decimal separator and/or decimal exponent
+
+## T_COMMENT = 8
+
+comment. Contains the pure comment text, not its delimiters.
+Delimitersmay be accessible via lexer context"
+
+## T_TEXT = 9
+
+Some text without defined lexical or semantic properties.
+This is the default category for tokens used in general string processing.
+
+In a lexer context it is recommended for text which is excluded from lexical
+analysis, e. g. if some escape sequence is found. The escape sequence can
+be reported as preceding token (this requires the lexer to maintain ins state
+as 'in escape mode'), or as token which can be accessed just after parsing
+this token.
+
+
+# group (4): categories used in parsers and TokenTree, not defined lexically
+
+
+## T_END = 10
+
+End of some token sequence. It may contain a string, e. g. the end of a node
+in XML, or may be an empty token, e. g. if reported by the lexer on an
+attempt to parse beyond end of data.
+
+In a TokenTree, for each token having of one of the following
+categories, there must be a T_END Token to close the sequence of its
+children.
+
+## T_SYMBOL = 11
+
+One or more special characters which form a semantically interpreted
+symbol, e.g. "*", ">>>" or "+=". A lexer may accept different notations for the
+same symbol, e. g. "<>", "!=" and "≠" for inequality,
+and may replace different notations by one of the others.
+
+Symbols usually fit into a DirectToken. Consider to grant this in your
+application (and use DirectToken vor symbols).
+
+In TokenTree, symbols can have children, to reflect the use of symbols
+as operators in common computer languages.
+
+## T_KEY = 12
+
+Identifier recognized as keyword, typically a TinyToken. Lexers may support
+different nonations for a keyword, and return a 'canonical' representation,
+e. g. converting SQL keywords to uppercase. If all T_KEY strings have a
+canonical representation with less than 8 code units, your application could
+restrict T_KEY tokens to type DirectToken.
+
+Reserved words in programming languages are usually tokenized as T_KEY.
+In a TokenTree, they can have children, e. g. condition and action for
+control structures like IF/THEN/ELSE or FUNCTION parameters and code.
+
+## T_PI = 13
+
+processing instruction. In a TokenTree, its children represent the parsed
+content of the instruction.
+
+A lexer will typically identify a processing instruction by some unique prefix
+and suffix, return the text between as unparsed text in a T_PI
+token, and make prefix and suffix accessible via its context.
+The caller will then parse the T_PI content (e.g. by calling another Lexer).
+
+Examples are DTD and PI in XML, embedded javascript code in HTML,
+processing instructions in text templates like XSLT.
+
+## T_STRUCT = 14
+
+structure: a node in TokenTree which has children of different "types", like
+a struct in Julia.
+
+## T_SEQ = 15
+
+sequence: a node in TokenTree which has children of the same type,
+like arrays in Julia.
+
+
+
+
+
+"""
+@enum TCategory :: UInt64
+    T_WHITE
+    "Identifier, usually a letter/digit sequence"
+    const T_IDENT = UInt64(1)
+
+    "Special character sequence, no known semantic (no letter, digit, white, symbol)"
+    const T_SPECIAL = UInt64(2)
+
+    "Sequence of digits, may have leading sign"
+    const T_INT = UInt64(3)
+
+    # group (2): token category determined by 1st byte,
+    # token contains all following bytes until termination byte is
+    # found, typically the 1st byte again.
+    # Parser may implement some way to include
+    # 1st byte in token, by an escape prefix byte or by
+    # doubling 1st byte.
+
+    "string enclosed in double quotes"
+    const T_QUOTED = UInt64(4)
+
+    "string enclosed in single quotes, typically a TinyToken (one character)"
+    const T_CHAR = UInt64(5)
+
+    # group (3): token category determined by 1st byte,
+    # individual rules for consuming more bytes into token
+
+    "symbol (special characters with semantic meaning), typically a TinyToken"
+    const T_SYMBOL = UInt64(6)
+
+    "End of line sequence, 1 or 2 characters, typically a TinyToken"
+    const T_EOL = UInt64(7)
+
+
+    # group (4): tokens which specialize or extend tokens from group 1-3
+
+    "identifier recognized as keyword, typically a TinyToken"
+    const T_KEY = UInt64(8)
+
+    "An optionally signed number with a decimal separator and/or decimal exponent"
+    const T_FLOAT = UInt64(9)
+
+    "comment, pure comment text. Delimiters accessible via lexer context"
+    const T_COMMENT = UInt64(10)
+
+    # group (5): categories for parsers and TokenTree, not lexically deducted
+    # lexer can use these categories for text which is enclosed by a prefix
+    # symbol and a suffix symbol and is not lexically analyzed
+
+    "end-of-data, marks subtree end in TokenTree, lexer: end of data / nothing"
+    const T_EOD = UInt64(11)
+
+    "Default category: some text, no lexical analysis performed"
+    const T_TEXT = UInt64(12)
+
+    "processing instruction: nonleaf AST node, lexer: symbol-delimited char sequence"
+    const T_PI = UInt64(13)
+
+    "structure: nonleaf AST node, lexer: symbol-delimited char sequence"
+    const T_STRUCT = UInt64(14)
+
+    "sequence: nonleaf AST node, lexer: symbol-delimited char sequence"
+    const T_SEQ = UInt64(15)
+
+
+end
 
 
 ################ common category labels  #####################

@@ -1,44 +1,61 @@
 
 """
-A categorized string, supertype of all token types in this module.
+common supertype for all token vectors.
 
-In addition to the AbstractString API, an AbstractToken has a
-[`TokenCategory`](@ref) which classifies the content and its
-encoding. It is accessed by [`category`](@ref)(t::AbstractToken).
 
-To check only the encoding, the (slightly faster) function
-[`islatin`](@ref)(t::AbstractToken) must be supplied which returns
-0 if any encoding is used, and some value>0 if ISO-8851-1 or Latin1
-encoding is used, so that one code unit (1 byte) represents one
-character.
 
-An AbstractToken can have up to 2^24-1 code units.
-
-This module supplies very memory efficient implementations
-for very short tokens with [`TinyToken`](@ref),
-field String wFlyweight string with an associated token category.
-
-This string data type directly stores very short strings with a length
-of up to 7 code units. It supports the AbstractString API and can be
-used as a memory efficient substitute for String instances, avoiding
-any pointer overhead.
-
-In addition to its AbstractString API,
-
-Together wit a code unit buffer, it can hold strings of a length up to
-2**24.
-It can also hold longer strings, but then, a buffer must be supplied
-which holds all code units. The flyweight value encodes an offset and
-a length, in this case.
 """
-mutable struct TokenVector <: AbstractVector{Token}
-    vec :: Vector{TinyToken}
-    buffer :: String # storage
-    used :: UInt32 # no of bytes currently used
-    shared :: UInt32 # no of bytes shared in buffer
-    flags :: Int
-
+abstract type AbstractTokenVector{T <: TinyToken} <: AbstractVector{Token}
 end
+
+"""
+Memory-efficient array of tokens.
+
+"""
+mutable struct PTokenVector{T <: TinyToken} <: AbstractTokenVector{T <: TinyToken}
+    vec :: Vector{T}
+    buffer :: String # private storage shared by all elements
+    used :: UInt32 # no of bytes currently used
+    shared :: UInt32 # no of bytes in buffer shared with other objects
+    flags :: Int
+end
+
+
+"""
+The most commen token vector.
+"""
+const TokenVector = PTokenVector{HybridToken}
+
+"""
+A tree API for TokenVector.
+
+A TokenTree is based on TokenVector, but it offers an additional tree API.
+
+A tree node is identified by an index in the token array.
+Depending on its category, it is a leaf node (category <= T_END),
+ or it has a (probably empty) subtree (category > T_END): its children are
+the following nodes in the token array, until termination by a T_END token.
+T_END tokens are no tree nodes not part of the tree structure, itThe index of a T_END token
+
+
+"""
+mutable struct TokenTree <: AbstractTokenVector{HybridToken}
+    vec :: Vector{HybridToken}
+    buffer :: String # private storage shared by all elements
+    used :: UInt32 # no of bytes currently used
+    shared :: UInt32 # no of bytes in buffer shared with other objects
+    flags :: Int
+end
+
+
+# alternative: ein tree ist ein int32 array. Wert >0: leaf node.
+# wert <0: subtree
+# wert =0: end of subtree
+#
+# Vorteil: kann über JEDEM Vector gebaut werden (!!)
+# vorteil: halbe größe der END marker.
+# nachteil: zusätzliches array + 1 indirektion mehr
+
 
 """
 private auxiliary type for most AbstractToken implementations,

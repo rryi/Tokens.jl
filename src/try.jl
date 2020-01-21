@@ -6,6 +6,23 @@ mutable struct TS
 end
 
 
+struct S1
+    i1::Int64
+    i2::Int64
+end
+
+struct S2
+    i1::UInt64
+    i2::UInt64
+end
+
+#s1 = S1(1,2)
+#s2= S2(2,3)
+
+# error: reinterpret nicht für struct erlaubt
+#s3 = reinterpret(S1,s2)
+
+
 function read(t::TA{T}, pos::Int) where T
     @inbounds t.buf[pos]
 end
