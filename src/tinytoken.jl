@@ -202,6 +202,12 @@ code is needed.
 primitive type HybridToken <: TinyToken 64 end
 
 
+####################################################################
+### basic helpers ##################################################
+####################################################################
+
+
+
 
 
 """
@@ -239,6 +245,14 @@ operations defined for Int64 or UInt 64. We need a short notation
 to convert between (U)Int64 and TinyToken. No checks!!
 """
 bt(bits) = reinterpret(BufferToken,bits)
+
+
+####################################################################
+### constructors  ##################################################
+####################################################################
+
+
+
 
 """
 UNSAFE !! lowlevel constructor for a token referencing some external buffer.
@@ -348,6 +362,14 @@ unsafe_set(t:TinyToken, index, codeunit::Uint8) =
 unsafe_set(t::TinyToken, index, codeunit::Uint8) =
      TinyToken(Unsafe, unsafe_set(t.bits, index, codeunit))
 
+
+
+     ####################################################################
+     ### Base operators and functions overloading #######################
+     ####################################################################
+
+
+
 """
     *(t::TinyToken, s::Union{UInt8,Char,AbstractString)
 
@@ -377,16 +399,36 @@ function (*)(t::TinyToken, cu::UInt8)
 end
 
 
+
+####################################################################
+### string literal macros ##########################################
+####################################################################
+
+
+
 """
-    t?"shorttext"
+    <TCategory_enum>"minitxt"
 
-returns a TinyToken containing "anytext" with
-category ?. ? is a hex character, interpreted as an UInt8
+returns a DirectToken containing "minitxt" with
+category TCategory_enum.
 
-Restriction: argument literal must resolve to a
+Restriction: argument literal "minitxt" must resolve to a
 character sequence of at most 7 code units
 """
-macro t0_str(s) = TinyToken(0x0,s)
+macro T_WHITE_str(s) = DirectToken(T_WHITE,s)
+
+#=
+mit macro generieren!!!
+
+for tc in TCategory
+    eval(quote
+        $OP(a::mytype,b::mytype) = $OP(a.x,b.x) # how to generate Base.OP
+    end)
+end
+=#
+
+
+
 macro t1_str(s) = TinyToken(0x1,s)
 macro t2_str(s) = TinyToken(0x2,s)
 macro t3_str(s) = TinyToken(0x3,s)
@@ -569,5 +611,11 @@ Base.collect(s::TinyToken) = getindex.(s, 1:lastindex(s))
     String(s)  == b
 end
 =#
+
+
+
+#######################################
+
+Base.cmp(a::AbstractToken, b::AbstractToken) = cmp_codeunits(a,b)
 
 end # module
