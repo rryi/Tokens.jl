@@ -229,8 +229,22 @@ a struct in Julia.
 
 sequence: a node in TokenTree which has children of the same type,
 like arrays in Julia.
+
+
+# special string literals for tokens
+
+For every enum value, a special string literal syntax is defined
+to create token literals of the appropriate category and most
+efficient representation. Exampie:
+
+T_INT"123"
+
+generates a DirectToken(T_INT,"123").
+
+
+
 """
-@enum TCategory :: UInt64
+@enum TCategory :: UInt8
     T_WHITE = 0
     T_IDENT = 1
     T_SPECIAL = 2
@@ -249,6 +263,18 @@ like arrays in Julia.
     T_SEQ = 15
 end
 
+# Generation of the string literal macros for tokens
+for cat in instances(TCategory)
+    eval(quote
+        macro $(Symbol(Symbol(cat),"_str"))(txt)
+            if ncodeunits(txt)>7
+                :(BufferToken($($(cat)),$txt))
+            else
+                :(DirectToken($($(cat)),$txt))
+            end
+        end
+    end)
+end
 
 """
     subtoken(t::AbstractToken, first::Int, last::Int)

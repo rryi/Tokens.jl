@@ -211,38 +211,35 @@ primitive type HybridToken <: TinyToken 64 end
 
 
 """
-Private unsafe convenience converter to an UInt64 value.
+Private convenience converter to an UInt64 value.
 
 All TinyToken operations are finally implemented with native 64 bit
-operations defined for Int64 or UInt 64. We need a short notation
+operations defined for Int64 or UInt64. We need a short notation
 to convert between (U)Int64 and TinyToken. No checks!!
 """
 uint(t::TinyToken) =  reinterpret(UInt64,t)
 
 """
-Private unsafe convenience converter to an UInt64 value.
+Private unsafe convenience converter to a DirectToken.
 
-All TinyToken operations are finally implemented with native 64 bit
-operations defined for Int64 or UInt 64. We need a short notation
-to convert between (U)Int64 and TinyToken. No checks!!
+Argument must be a 64 bit primitive value.
+No checks performed!
 """
 dt(bits) = reinterpret(DirectToken,bits)
 
 """
-Private unsafe convenience converter to an UInt64 value.
+Private unsafe convenience converter to a HybridToken.
 
-All TinyToken operations are finally implemented with native 64 bit
-operations defined for Int64 or UInt 64. We need a short notation
-to convert between (U)Int64 and TinyToken. No checks!!
+Argument must be a 64 bit primitive value.
+No checks performed!
 """
 ht(bits) = reinterpret(HybridToken,bits)
 
 """
-Private unsafe convenience converter to an UInt64 value.
+Private unsafe convenience converter to a BufferToken.
 
-All TinyToken operations are finally implemented with native 64 bit
-operations defined for Int64 or UInt 64. We need a short notation
-to convert between (U)Int64 and TinyToken. No checks!!
+Argument must be a 64 bit primitive value.
+No checks performed!
 """
 bt(bits) = reinterpret(BufferToken,bits)
 
@@ -407,18 +404,34 @@ end
 
 
 """
-    <TCategory_enum>"minitxt"
+    <TCategory_enum>"text"
 
-returns a DirectToken containing "minitxt" with
+returns a Token containing "text" with
 category TCategory_enum.
 
-Restriction: argument literal "minitxt" must resolve to a
-character sequence of at most 7 code units
+Example: T_INT"123" returns a DirectToken(T_INT,"123").
+
+The literal macros generate either a DirectToken (up to 7 code units)
+or a BufferToken (larger sizes).
+
+macro T_WHITE_str(txt)
+    if ncodeunits(txt)>7
+        :(BufferToken(T_WHITE,$txt))
+    else
+        :(DirectToken(T_WHITE,$txt))
+    end
+end
+
 """
 macro T_WHITE_str(s) = DirectToken(T_WHITE,s)
 
 #=
 mit macro generieren!!!
+
+und dabei Fall size(..)>7 beachten.
+return DirectToken oder PToken{BufferToken} oder InternedToken
+
+
 
 for tc in TCategory
     eval(quote
