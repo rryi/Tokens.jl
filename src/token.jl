@@ -19,15 +19,27 @@ offset(t::TinyBufferToken) = offset(t.tiny)
 
 Base.ncodeunits(t::TinyBufferToken) = ncodeunits(t.tiny)
 
-category(t::TinyBufferToken) = category(t.tiny)
+TCategory(t::TinyBufferToken) = TCategory(t.tiny)
+
+
 
 
 
 """
-Immutable token, characteristics similar to SubString
+Immutable token, either direct enoded or buffer based
 """
 struct Token <: TinyBufferToken
-    tiny :: TinyToken # current value, offset referencing buffer
+    tiny :: HybridToken # category, size, offset
+    buffer :: String # memory with token text data.
+end
+
+
+
+"""
+Immutable token, always buffer based
+"""
+struct BufferToken <: TinyBufferToken
+    tiny :: FlyToken # category, size, offset
     buffer :: String # memory with token text data.
 end
 
@@ -35,11 +47,13 @@ end
 """
 Mutable token, able to share its buffer with other tokens
 and ['SubString']@ref
+
+DANGER: any function reusing buffer of a TinyBufferToken MUST be overloaded
 """
 mutable struct MutableToken <: TinyBufferToken
-    tiny :: TinyToken # current value, offset referencing buffer
+    tiny :: FlyToken # current value, offset referencing buffer
     buffer :: String # PRIVATE!! memory with token text data.
-    shared :: UInt32 #last index in buffer shared with other tokens
+    shared :: UInt32 # last index in buffer shared with other tokens (0 is valid)
 end
 
 

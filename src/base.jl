@@ -276,6 +276,7 @@ for cat in instances(TCategory)
     end)
 end
 
+
 """
     subtoken(t::AbstractToken, first::Int, last::Int)
 

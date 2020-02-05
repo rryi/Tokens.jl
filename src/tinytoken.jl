@@ -3,18 +3,26 @@
 "maximal count of code units directly encoded in a TinyToken"
 const MAX_TINY_SIZE = 7
 
-"maximal count of code units in any Token"
-const MAX_TOKEN_SIZE = (SIZE_BITS_27 ? (1<<27) : (1<<24) ) - 1
+"maximal count of code units in any buffer based Token"
+const MAX_TOKEN_SIZE = (1<<27) - 1
 
 "bitmask to check if any inline code unit is not ascii"
-const NOTASCII_BITS :: UInt64 = 0x10000000100000001000000010000000100000001000000010000000
+const NOTASCII_BITS = UInt64(0x10000000100000001000000010000000100000001000000010000000)
 
 "bitmask to restrict to all code units"
-const CODEUNIT_BITS :: UInt64 = (UInt64(1)<<56)-1
+const CODEUNIT_BITS =(UInt64(1)<<56)-1
+
+"bitmask to isolate size bits in DirectToken"
+const DIRECTSIZE_BITS = UInt64(MAX_TINY_SIZE)<<56
+
+"bitmask to isolate size bits in DirectToken"
+const BUFFERSIZE_BITS = UInt64(MAX_TOKEN_SIZE)<<32
 
 "bitmask to test for tiny. Bit set -> (offset,size) pair stored"
 const NOTTINY_BIT :: UInt64 = (UInt64(1)<<63)
 
+"true: size bitfield is split in [`BufferToken`](@ref)"
+const BUFFER_SPLIT_SIZE = false
 
 "marker type to tag constructors as unsafe"
 struct Unsafe end
@@ -28,7 +36,7 @@ const Bits64 = union {UInt64, Int64}
 A flyweight data structure for an immutable Token.
 
 All subtypes must be 64 bit primitive data types which implement a certain
-bitmap layout and conventions for processing it.
+bitmap layout and methods for processing it.
 
 """
 abstract type TinyToken <: AbstractToken
@@ -105,11 +113,10 @@ Memory layout:
 
 ```
 bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
-    =1 =========== ======== ================= =======================
-    |  |           |        |                 |
-    |  |           |        |                 offset: 0..2^32-1
-    |  |           |        size>>3: bits 3..26 of size
-    |  |           size&7: lowest 3 bits
+    =1 =========== ========================== =======================
+    |  |           |                          |
+    |  |           |                          offset: 0..2^32-1
+    |  |           size: 26 bits
     |  category: 0..15
     |
     =1: must be 1 for any BufferToken instance.
@@ -118,8 +125,25 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
 ```
 
 
+if [`BUFFER_SPLIT_SIZE`](@ref) is true, the following bit leyout is used:
+
+    ```
+    bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
+        =1 =========== ======== ================= =======================
+        |  |           |        |                 |
+        |  |           |        |                 offset: 0..2^32-1
+        |  |           |        size>>3: bits 3..26 of size
+        |  |           size&7: lowest 3 bits
+        |  category: 0..15
+        |
+        =1: must be 1 for any BufferToken instance.
+        code units are stored in buffer[offset+1] .. buffer[offset+size]
+        buffer must be known in the processing context.
+    ```
+
+
 """
-primitive type BufferToken <: TinyToken 64 end
+primitive type FlyToken <: TinyToken 64 end
 
 
 
@@ -140,7 +164,7 @@ conditional jump on access. Because caller do not know in advance
 by a BufferToken has to be supplied in the processing context and is
 unused if the concrete instance is a DirectToken.
 
-The advantage over BufferToken is less memory consumption, and faster
+The advantage over FlyToken is less memory consumption, and faster
 access to code units because no indirection takes place, if the actual
 instance is a DirectToken.
 
@@ -241,7 +265,33 @@ Private unsafe convenience converter to a BufferToken.
 Argument must be a 64 bit primitive value.
 No checks performed!
 """
-bt(bits) = reinterpret(BufferToken,bits)
+ft(bits) = reinterpret(FlyToken,bits)
+
+
+"set size in TinyToken: private unsafe method, no checks!"
+function setSize end
+
+"set size in TinyToken: private unsafe method, no checks!"
+function setSize(t::DirectToken, newSize)
+    dt((UInt64(newSize)<<59) | (uint(t) & ~DIRECTSIZE_BITS))
+end
+
+"set size in TinyToken: private unsafe method, no checks!"
+function setSize(t::FlyToken, newSize)
+    if BUFFER_SPLIT_SIZE)
+        ft((UInt64(newSize&7)<<59) | UInt64(newSize>>>3)<<32) | (uint(t) & ~BUFFERSIZE_BITS))
+    else
+        ft((UInt64(newSize)<<59) | (uint(t) & ~DIRECTSIZE_BITS))
+    end
+end
+
+
+"category of a tinytoken"
+TCategory(t::TinyToken) = reinterpret(TCategory, UInt8((uint(t) >>>59)&15))
+
+TCategory(t::DirectToken) = reinterpret(TCategory, UInt8(uint(t) >>>59))
+
+
 
 
 ####################################################################
@@ -260,9 +310,17 @@ TinyToken might be invalid.
 
 In application code, use TinyToken(category,offset,size,s<:AbstractString).
 """
-function BufferToken(::Unsafe, category::UInt64, offset::UInt64, size::UInt64)
-    bt(NOTTINY_BIT | category<<59 | (size&7)<<56 | (size>>3)<<32 | offset)
+function FlyToken(category::TCategory, offset::UInt64, size::UInt64)
+    setOfsSize(FlyToken(category),offset,size)
 end
+
+"empty token (offset, length are 0)"
+function FlyToken(category::TCategory)
+    ft(NOTTINY_BIT | UInt64(category)<<59)
+end
+
+
+
 
 
 """
@@ -274,7 +332,7 @@ TinyToken might be invalid.
 
 In application code, use TinyToken(category,s::Utf8String).
 """
-function TinyToken(::Unsafe, category::UInt64, size)
+function DirectToken(category::TCategory, size)
     tt( category<<59 | UInt64(size&7)<<56)
 end
 
@@ -402,64 +460,6 @@ end
 ####################################################################
 
 
-
-"""
-    <TCategory_enum>"text"
-
-returns a Token containing "text" with
-category TCategory_enum.
-
-Example: T_INT"123" returns a DirectToken(T_INT,"123").
-
-The literal macros generate either a DirectToken (up to 7 code units)
-or a BufferToken (larger sizes).
-
-macro T_WHITE_str(txt)
-    if ncodeunits(txt)>7
-        :(BufferToken(T_WHITE,$txt))
-    else
-        :(DirectToken(T_WHITE,$txt))
-    end
-end
-
-"""
-macro T_WHITE_str(s) = DirectToken(T_WHITE,s)
-
-#=
-mit macro generieren!!!
-
-und dabei Fall size(..)>7 beachten.
-return DirectToken oder PToken{BufferToken} oder InternedToken
-
-
-
-for tc in TCategory
-    eval(quote
-        $OP(a::mytype,b::mytype) = $OP(a.x,b.x) # how to generate Base.OP
-    end)
-end
-=#
-
-
-
-macro t1_str(s) = TinyToken(0x1,s)
-macro t2_str(s) = TinyToken(0x2,s)
-macro t3_str(s) = TinyToken(0x3,s)
-macro t4_str(s) = TinyToken(0x4,s)
-macro t5_str(s) = TinyToken(0x5,s)
-macro t6_str(s) = TinyToken(0x6,s)
-macro t7_str(s) = TinyToken(0x7,s)
-macro t8_str(s) = TinyToken(0x8,s)
-macro t9_str(s) = TinyToken(0x9,s)
-macro ta_str(s) = TinyToken(0xa,s)
-macro tb_str(s) = TinyToken(0xb,s)
-macro tc_str(s) = TinyToken(0xc,s)
-macro td_str(s) = TinyToken(0xd,s)
-macro te_str(s) = TinyToken(0xe,s)
-macro tf_str(s) = TinyToken(0xf,s)
-
-
-
 function offset(t::TinyToken)
     mask = ((reinterpret(Int64,t.bits)>>63) & (UInt64(1)<<32 -1) # 0 for direct CU, 0xffffffff else
     convert(UInt32,t.bits & mask)
@@ -488,7 +488,7 @@ end
 
 
 
-category(t::TinyToken) = UInt8((t.bits>>59)&15)
+category(t::TinyToken) = TCategory(UInt8((uint(t)>>59)&15))
 
 
 "True, if code units are stored directly in TinyToken (no external buffer)"
