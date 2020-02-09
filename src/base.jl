@@ -85,19 +85,32 @@ If code units are stored directly in a TinyToken, offset is 0.
 Buffer is not needed in this function, no consistency or bounds
 checks are performed.
 """
-function offset end
+function offset(t::AbstractToken) -> UInt
+    throw(MethodError(offset, (t,)))
+end
 
 
 """
-    category(t::AbstractToken) :: TCategory
+    isDirecty(t::AbstractToken) -> Bool
+
+true if t stores its code units directly in its TinyToken.
+"""
+function isDirect(t::AbstractToken)
+    throw(MethodError(offset, (t,)))
+end
+
+
+"""
+    category(t::AbstractToken) -> TCategory
 
 Current category of given token. A value in 0:15.
 Meaning depends on context. [`Lexer`](@ref) uses
 the meaning defined in the following constants beginning with "T_"
 
 """
-function category end
-
+function category (t::AbstractToken)
+    throw(MethodError(offset, (t,)))
+end
 """
 Token category definitions
 
@@ -222,14 +235,17 @@ processing instructions in text templates like XSLT.
 
 ## T_STRUCT = 14
 
-structure: a node in TokenTree which has children of different "types", like
-a struct in Julia.
+structure: a node in TokenTree with children.
+T_STRUCT is recommended if children access is based on a key attribute which
+identifies them within the children list, like a field name in a julia struct or the
+attribute name in an XML item. Often, children have different data types and
+a static list of allowed keys exists.
 
-## T_SEQ = 15
+## T_LIST = 15
 
-sequence: a node in TokenTree which has children of the same type,
-like arrays in Julia.
-
+list: a node in TokenTree with children.
+T_LIST is recommended if children access is based on the sequence order,
+like julia vectors or JSON arrays. Often, all children have the same data type
 
 # special string literals for tokens
 
@@ -260,7 +276,7 @@ generates a DirectToken(T_INT,"123").
     T_KEY = 12
     T_PI = 13
     T_STRUCT = 14
-    T_SEQ = 15
+    T_LIST = 15
 end
 
 # Generation of the string literal macros for tokens

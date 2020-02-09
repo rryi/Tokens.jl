@@ -15,8 +15,8 @@ const CODEUNIT_BITS =(UInt64(1)<<56)-1
 "bitmask to isolate size bits in DirectToken"
 const DIRECTSIZE_BITS = UInt64(MAX_TINY_SIZE)<<56
 
-"bitmask to isolate size bits in DirectToken"
-const BUFFERSIZE_BITS = UInt64(MAX_TOKEN_SIZE)<<32
+"bitmask to isolate size bits in FlyToken"
+const FLYSIZE_BITS = UInt64(MAX_TOKEN_SIZE)<<32
 
 "bitmask to test for tiny. Bit set -> (offset,size) pair stored"
 const NOTTINY_BIT :: UInt64 = (UInt64(1)<<63)
@@ -260,7 +260,7 @@ No checks performed!
 ht(bits) = reinterpret(HybridToken,bits)
 
 """
-Private unsafe convenience converter to a BufferToken.
+Private unsafe convenience converter to a FlyToken.
 
 Argument must be a 64 bit primitive value.
 No checks performed!
@@ -273,24 +273,26 @@ function setSize end
 
 "set size in TinyToken: private unsafe method, no checks!"
 function setSize(t::DirectToken, newSize)
-    dt((UInt64(newSize)<<59) | (uint(t) & ~DIRECTSIZE_BITS))
+    dt((UInt64(newSize)<<56) | (uint(t) & ~DIRECTSIZE_BITS))
 end
 
 "set size in TinyToken: private unsafe method, no checks!"
 function setSize(t::FlyToken, newSize)
-    if BUFFER_SPLIT_SIZE)
-        ft((UInt64(newSize&7)<<59) | UInt64(newSize>>>3)<<32) | (uint(t) & ~BUFFERSIZE_BITS))
+    if BUFFER_SPLIT_SIZE
+        ft((UInt64(newSize&7)<<56) | UInt64(newSize>>>3)<<32) | (uint(t) & ~FLYSIZE_BITS))
     else
-        ft((UInt64(newSize)<<59) | (uint(t) & ~DIRECTSIZE_BITS))
+        ft((UInt64(newSize)<<32) | (uint(t) & ~FLYSIZE_BITS))
     end
 end
 
-
-"category of a tinytoken"
-TCategory(t::TinyToken) = reinterpret(TCategory, UInt8((uint(t) >>>59)&15))
-
-TCategory(t::DirectToken) = reinterpret(TCategory, UInt8(uint(t) >>>59))
-
+"set size in HybridToken, assuming no type change DirectToken <|> FlyToken. no checks!"
+function setSize(t::HybridToken, newSize)
+    if isDirect(t){
+        ht(setSize(dt(t),newSize)
+    else
+        ht(setSize(ft(t),newSize)
+    end
+end
 
 
 
@@ -486,19 +488,32 @@ function Base.cmp(a::TinyToken, b::TinyToken)
     0
 end
 
+#########################################################
+################ Token API methods ######################
+#########################################################
 
 
-category(t::TinyToken) = TCategory(UInt8((uint(t)>>59)&15))
+category(t::TinyToken) = reinterpret(TCategory, UInt8((uint(t) >>>59)&15))
+
+category(t::DirectToken) = reinterpret(TCategory, UInt8(uint(t) >>>59))
 
 
-"True, if code units are stored directly in TinyToken (no external buffer)"
-function checktiny (::Bool, t::TinyToken)
-    reinterpret(Int64,t.bits) >=0
-end
+isDirect(t::TinyToken) = reinterpret(Int64,t)>=0
+
+isDirect(t::DirectToken) = true
+
+isDirect(t::FlyToken) = false
+
+
+#########################################################
+################ check methods ##########################
+#########################################################
+
+
 
 "throw an error if token references some buffer"
 function checktiny(t::TinyToken)
-    @boundscheck checktiny(Bool,t) || throw(ErrorException("TinyToken references unknown buffer: &t"))
+    @boundscheck isDirect(t) || throw(ErrorException("TinyToken references unknown buffer: &t"))
     nothing
 end
 

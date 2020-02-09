@@ -15,17 +15,10 @@ end
 
 
 
-offset(t::TinyBufferToken) = offset(t.tiny)
-
-Base.ncodeunits(t::TinyBufferToken) = ncodeunits(t.tiny)
-
-TCategory(t::TinyBufferToken) = TCategory(t.tiny)
-
-
-
-
 
 """
+Recommended general-purpose Token implementation.
+
 Immutable token, either direct enoded or buffer based
 """
 struct Token <: TinyBufferToken
@@ -37,6 +30,8 @@ end
 
 """
 Immutable token, always buffer based
+
+Use this type if you expect most token sizes to be above 7
 """
 struct BufferToken <: TinyBufferToken
     tiny :: FlyToken # category, size, offset
@@ -45,15 +40,17 @@ end
 
 
 """
-Mutable token, able to share its buffer with other tokens
-and ['SubString']@ref
+Mutable buffer, able to share its buffer with token
+and ['SubString']@ref instances
 
-DANGER: any function reusing buffer of a TinyBufferToken MUST be overloaded
+
+
 """
-mutable struct MutableToken <: TinyBufferToken
-    tiny :: FlyToken # current value, offset referencing buffer
-    buffer :: String # PRIVATE!! memory with token text data.
-    shared :: UInt32 # last index in buffer shared with other tokens (0 is valid)
+mutable struct SharedBuffer <: IO
+    buffer :: String # PRIVATE!! memory with token/substring text data.
+    first :: UInt32 # read position offset of first not consumed byte
+    free :: UInt32 # write position offset: offset of first unused byte
+    shared :: UInt32 # last index in buffer shared with other objects (0 is valid)
 end
 
 
@@ -74,12 +71,39 @@ String(take!(out))
 =#
 
 
+#########################################################
+################ Token API methods ######################
+#########################################################
+
+offset(t::TinyBufferToken) = offset(t.tiny)
+
+category(t::TinyBufferToken) = category(t.tiny)
+
+isDirect(t::TinyBufferToken) = isDirect(t.tiny)
+
+isDirect(t::BufferToken) = false
+
+isDirect(t::MutableToken) = false
+
+
+
+
 
 #########################################################
 ############## Base methods for tokens ##################
 #########################################################
 
+Base.ncodeunits(t::TinyBufferToken) = ncodeunits(t.tiny)
+
+
 function Base.SubString(t::TinyBufferToken,i::Int, j::Int)
+    if isDirect(t)
+    t.tiny<0 ? SubString(t.)
+     = SubString()
+end
+
+#
+function Base.SubString(t::MutableToken,i::Int, j::Int)
     if
     t.tiny<0 ? SubString(t.)
      = SubString()
