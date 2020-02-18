@@ -271,13 +271,15 @@ ft(bits) = reinterpret(FlyToken,bits)
 "set size in TinyToken: private unsafe method, no checks!"
 function setSize end
 
-"set size in TinyToken: private unsafe method, no checks!"
-function setSize(t::DirectToken, newSize)
+"set size in TinyToken: size limit checked, no conent checks!"
+function setSize(t::DirectToken, newSize::Integer)
+    @boundscheck checksize(newSize)
     dt((UInt64(newSize)<<56) | (uint(t) & ~DIRECTSIZE_BITS))
 end
 
 "set size in TinyToken: private unsafe method, no checks!"
-function setSize(t::FlyToken, newSize)
+function setSize(t::FlyToken, newSize::Integer)
+    @boundscheck checksize(newSize,MAX_TOKEN_SIZE)
     if BUFFER_SPLIT_SIZE
         ft((UInt64(newSize&7)<<56) | UInt64(newSize>>>3)<<32) | (uint(t) & ~FLYSIZE_BITS))
     else
@@ -286,7 +288,7 @@ function setSize(t::FlyToken, newSize)
 end
 
 "set size in HybridToken, assuming no type change DirectToken <|> FlyToken. no checks!"
-function setSize(t::HybridToken, newSize)
+function setSize(t::HybridToken, newSize::Integer)
     if isDirect(t){
         ht(setSize(dt(t),newSize)
     else
@@ -326,16 +328,22 @@ end
 
 
 """
-UNSAFE !! lowlevel constructor for a token with direct encoding
+Constructor of an empty token with given category.
 
-This constructor is used internally and should not be called from
-application code - NO CHECKS AT ALL are performed, the resulting
-TinyToken might be invalid.
-
-In application code, use TinyToken(category,s::Utf8String).
+All codeunit bytes are 0, length is 0.
 """
-function DirectToken(category::TCategory, size)
-    tt( category<<59 | UInt64(size&7)<<56)
+function DirectToken(category::TCategory)
+    dt( UInt64(category)<<59 )
+end
+
+"""
+Constructor of an empty token with given category.
+
+A Hypridtoken of flavour DirectToken is constructed.
+All codeunit bytes are 0, length is 0.
+"""
+function HybridToken(category::TCategory)
+    ht( DirectToken(category))
 end
 
 
@@ -344,8 +352,7 @@ constructor for direct encoding from Utf8-encoded strings.
 
 bounds checks: valid category, ncodeunits(s)<=7
 """
-function TinyToken(category::Unsigned, s::Utf8String)
-    @boundscheck checkcategory(category)
+function DirectToken(category::TCategory, s::Utf8String)
     size = UInt64(ncodeunits(s))
     @boundscheck checksize(size,7)
     @inbounds TinyToken(category, UInt64(0),size,s)
