@@ -1,28 +1,40 @@
 # TinyToken type and associated methods
 
 "maximal count of code units directly encoded in a TinyToken"
-const MAX_TINY_SIZE = 7
+const MAX_DIRECT_SIZE = UInt64(7)
 
 "maximal count of code units in any buffer based Token"
-const MAX_TOKEN_SIZE = (1<<27) - 1
+const MAX_TOKEN_SIZE = UInt64((1<<27) - 1)
 
 "bitmask to check if any inline code unit is not ascii"
 const NOTASCII_BITS = UInt64(0x10000000100000001000000010000000100000001000000010000000)
 
-"bitmask to restrict to all code units"
+"bitmask to restrict to all code units in a DirectToken"
 const CODEUNIT_BITS =(UInt64(1)<<56)-1
 
 "bitmask to isolate size bits in DirectToken"
-const DIRECTSIZE_BITS = UInt64(MAX_TINY_SIZE)<<56
+const DIRECT_SIZE_BITS = UInt64(MAX_TINY_SIZE)<<56
 
 "bitmask to isolate size bits in FlyToken"
-const FLYSIZE_BITS = UInt64(MAX_TOKEN_SIZE)<<32
+const FLY_SIZE_BITS = UInt64(MAX_TOKEN_SIZE)<<32
+
+"bitmask to isolate splitted size bits in FlyToken"
+const SPLIT_SIZE_BITS = UInt64((1<<24)-1)<<32
+
+"bitmask to restrict to all code units in a DirectToken"
+const OFFSET_BITS =(UInt64(1)<<32)-1
+
+"bitmask to isolate category and fly type bit in any TinyToken"
+const CATEGORY_FLY_BITS = UInt64(31)<<59
+
+"bitmask to isolate category in any TinyToken"
+const CATEGORY_BITS = UInt64(15)<<59
 
 "bitmask to test for tiny. Bit set -> (offset,size) pair stored"
-const NOTTINY_BIT :: UInt64 = (UInt64(1)<<63)
+const NOTTINY_BIT = (UInt64(1)<<63)
 
-"true: size bitfield is split in [`BufferToken`](@ref)"
-const BUFFER_SPLIT_SIZE = false
+"true: size bitfield is split in [`FlyToken`](@ref)"
+const FLY_SPLIT_SIZE = false
 
 "marker type to tag constructors as unsafe"
 struct Unsafe end
@@ -125,7 +137,7 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
 ```
 
 
-if [`BUFFER_SPLIT_SIZE`](@ref) is true, the following bit leyout is used:
+if [`FLY_SPLIT_SIZE`](@ref) is true, the following bit layout is used:
 
     ```
     bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
@@ -241,7 +253,7 @@ All TinyToken operations are finally implemented with native 64 bit
 operations defined for Int64 or UInt64. We need a short notation
 to convert between (U)Int64 and TinyToken. No checks!!
 """
-uint(t::TinyToken) =  reinterpret(UInt64,t)
+u64(t::TinyToken) =  reinterpret(UInt64,t)
 
 """
 Private unsafe convenience converter to a DirectToken.
@@ -268,33 +280,22 @@ No checks performed!
 ft(bits) = reinterpret(FlyToken,bits)
 
 
-"set size in TinyToken: private unsafe method, no checks!"
-function setSize end
 
-"set size in TinyToken: size limit checked, no conent checks!"
-function setSize(t::DirectToken, newSize::Integer)
-    @boundscheck checksize(newSize)
-    dt((UInt64(newSize)<<56) | (uint(t) & ~DIRECTSIZE_BITS))
+
+"""set a codeunit within a DirectToken assuming current value is 0.
+
+index must be 1..7, no checks performed.
+"""
+function unsafe_setcodeunit(t::DirectToken, index, codeunit::UInt8)
+    dt( u64(t) | ( UInt64(codeunit)<< ((7-index)<<3)))
 end
 
-"set size in TinyToken: private unsafe method, no checks!"
-function setSize(t::FlyToken, newSize::Integer)
-    @boundscheck checksize(newSize,MAX_TOKEN_SIZE)
-    if BUFFER_SPLIT_SIZE
-        ft((UInt64(newSize&7)<<56) | UInt64(newSize>>>3)<<32) | (uint(t) & ~FLYSIZE_BITS))
-    else
-        ft((UInt64(newSize)<<32) | (uint(t) & ~FLYSIZE_BITS))
-    end
-end
+offset(t::FlyToken) = convert(UInt32,u64(t) & OFFSET_BITS)
 
-"set size in HybridToken, assuming no type change DirectToken <|> FlyToken. no checks!"
-function setSize(t::HybridToken, newSize::Integer)
-    if isDirect(t){
-        ht(setSize(dt(t),newSize)
-    else
-        ht(setSize(ft(t),newSize)
-    end
-end
+offset(t::DirectToken) = UInt32(0)
+
+offset(t::HybridToken) = isdirect(t) ? offset(dt(t)) : offset(ft(t))
+
 
 
 
@@ -304,27 +305,35 @@ end
 
 
 
-
-"""
-UNSAFE !! lowlevel constructor for a token referencing some external buffer.
-
-This constructor is used internally and should not be called from
-application code - NO CHECKS AT ALL are performed, the resulting
-TinyToken might be invalid.
-
-In application code, use TinyToken(category,offset,size,s<:AbstractString).
-"""
-function FlyToken(category::TCategory, offset::UInt64, size::UInt64)
-    setOfsSize(FlyToken(category),offset,size)
-end
-
 "empty token (offset, length are 0)"
-function FlyToken(category::TCategory)
-    ft(NOTTINY_BIT | UInt64(category)<<59)
+function FlyToken(cat::TCategory)
+    ft(NOTTINY_BIT | UInt64(cat)<<59)
 end
 
 
+"token with given size, bounds-checked, offset 0"
+@propagate_inbounds function FlyToken(cat::TCategory, size::UInt64)
+    @boundscheck checksize(size,MAX_TOKEN_SIZE)
+    if FLY_SPLIT_SIZE
+        ft((size&7)<<56 | (size>>>3)<<32) | (u64(FlyToken(cat)))
+    else
+        ft(size<<32 | u64(FlyToken(cat)))
+    end
+end
 
+
+"""
+Lowlevel constructor for a token referencing some external buffer.
+
+UNSAFE because the referenced buffer is not given.
+Method cannot check whether (offset,size) is valid for the buffer which is
+used with this token. You have to grant (or check) validity of (offset,size)
+with respect to the referenced buffer in your code elsewere.
+
+"""
+@propagate_inbounds function FlyToken(cat::TCategory, offset::UInt32, size::UInt64)
+    ft(u64(FlyToken(t),size))|offset)
+end
 
 
 """
@@ -332,100 +341,40 @@ Constructor of an empty token with given category.
 
 All codeunit bytes are 0, length is 0.
 """
-function DirectToken(category::TCategory)
-    dt( UInt64(category)<<59 )
-end
+DirectToken(cat::TCategory) = dt( UInt64(cat)<<59 )
 
-"""
-Constructor of an empty token with given category.
 
-A Hypridtoken of flavour DirectToken is constructed.
-All codeunit bytes are 0, length is 0.
-"""
-function HybridToken(category::TCategory)
-    ht( DirectToken(category))
+"token with given size, bounds-checked, offset 0"
+@propagate_inbounds function DirectToken(cat::TCategory, size::UInt64)
+    @boundscheck checksize(size,MAX_DIRECT_SIZE)
+    dt(u64(DirectToken(cat)) | size<<56)
 end
 
 
 """
 constructor for direct encoding from Utf8-encoded strings.
 
-bounds checks: valid category, ncodeunits(s)<=7
+bounds checks performed
 """
-function DirectToken(category::TCategory, s::Utf8String)
-    size = UInt64(ncodeunits(s))
-    @boundscheck checksize(size,7)
-    @inbounds TinyToken(category, UInt64(0),size,s)
-end
-
-
-TinyToken(cat::Unsigned, s::AbstractString) = TinyToken(cat,string(s))
-
-
-"subtoken with offset/size descriptor"
-TinyToken(offset::Unsigned, size::Unsigned, t::AbstractToken) = TinyToken(
-    category(t),offset,size,t)
-)
-
-
-
-
-"""
-constructor for empty tiny token with direct data
-"""
-function TinyToken(cat::Unsigned)
-    @boundscheck checkcategory(cat)
-    reinterpret(TinyToken,UInt64(cat)<<59)ä
-end
-
-
-"""
-constructor for direct encoding from Utf8-encoded strings.
-
-bounds checks: valid cat, size<=7, offset+size<=ncodeunits(s)
-"""
-function TinyToken(cat::Unsigned, offset::Unsigned, size::Unsigned, s::Utf8String)
-    @boundscheck checkcategory(cat)
-    size = ncodeunits(s)
-    @boundscheck checksize(size,7)
-    @boundscheck size==0 || checkbounds(s, offset+size)
-    tt::UInt64 =
-    t = TinyToken(UInt64(cat))
-    for i in 1::size
-        @inbounds t = t * codeunit(s,offset+i)
+function DirectToken(cat::TCategory, offset::UInt32, size::UInt64, s::Utf8String)
+    @boundscheck check_ofs_size(offset,size,ncodeunits(s))
+    buffer = DirectToken(cat,size)
+    for i in 1:size
+        buffer = unsafe_setcodeunit(buffer,i,codeunit(s,offset+i))
     end
-    t
+    buffer
+end
+
+"token from a string constant (requires size<8)"
+function DirectToken(cat::TCategory, s::Utf8String)
+    @inbounds DirectToken(cat, 0, ncodeunits(s),s)
+    # TODO test size>7: bounds check still active? (because no propagate inbounds)
 end
 
 
-function TinyToken(cat::UInt8, s::String, offset::UInt64, size::Int)
-    @boundscheck checkcategory(cat)
-    msb = UInt64(cat)<<59 # most significant byte
-    if first >= last
-        return new(UInt64(cat)<<59) # empty string
-    end
-    @boundscheck checkbounds(s,first,last)
-    size = last-first
-    @boundscheck size < 8 || throw BoundsError("Size too large for TinyToken string constructor",size)
-    new(bits)
+function DirectToken(cat::TCategory, c::Char)
+    dt(u64(DirectToken(cat,Base.codelen(c))) | UInt64(reinterpret(UInt32, c)) << 24)
 end
-
-
-function TinyToken(cat::UInt8, c::Char)
-    @boundscheck checkcategory(cat)
-    TinyToken(Unsafe, UInt64(cat<<3 | Base.codelen(c)) << 56
-        |  UInt64(reinterpret(UInt32, c)) << 24)
-end
-
-
-"set a codeunit within a bitfield assuming current value is 0. No checks."
-unsafe_set(t:TinyToken, index, codeunit::Uint8) =
-    reinterpret(TinyToken, uint(t) | ( UInt64(codeunit)<< ((7-index)<<3)
-
-"set a codeunit within a TinyToken assuming current value is 0. No checks."
-unsafe_set(t::TinyToken, index, codeunit::Uint8) =
-     TinyToken(Unsafe, unsafe_set(t.bits, index, codeunit))
-
 
 
      ####################################################################
@@ -434,64 +383,43 @@ unsafe_set(t::TinyToken, index, codeunit::Uint8) =
 
 
 
-"""
-    *(t::TinyToken, s::Union{UInt8,Char,AbstractString)
-
-concatenation has to be supported. category is always copied from base
-token (first argument). code units are allowed to be concatenated, this
-can result in tokens representing an invalid Utf8 code unit sequence.
-
-Every token implementation must supply UInt8 (code unit) concatenation,
-other concatenation arguments have a default implementation using
-code unit concatenation
-"""
-function (*)(t::TinyToken, s::Utf8String)
+Base.sizeof(t::DirectToken) = (u64(t)&DIRECT_SIZEBITS)>>56
 
 
-end
-
-function (*)(t::TinyToken, c::Char)
-
-
+function Base.sizeof(t::FlyToken)
+    if FLY_SPLIT_SIZE
+        (u64(t)&DIRECT_SIZE_BITS) >>56 | (u64(t)&SPLIT_SIZE_BITS)>>29
+    else
+         (u64(t)&FLY_SIZE_BITS)>>32
+    end
 end
 
 
-function (*)(t::TinyToken, cu::UInt8)
-    @boundscheck checkappend(t,1)
-    unsafe_set (append(t,1))
-
+function Base.sizeof(t::HybridToken)
+    if FLY_SPLIT_SIZE
+        # tricky code without jumps:
+        # 3 lowest bits of the size are always stored at bit position 56..58.
+        # if NONASCII_BIT is set, we have additional 24 bits for size at bits 32..55
+        # We build a mask for bits 32..55 all 1 (bit 63 set, data in buffer)
+        # or 0 (bit 63 clear, all data in token, size is 0..7)
+        # by arithmetic shift of bit 63. ANDing with t.bits and shift by 29 gives
+        # the high bits 3..26 of the size.
+        masksize = (reinterpret(Int64,t)>>31) & ((1<<24-1)<<32)
+        ((u64(t)&masksize)>>>29) | ((u64(t) >>>56) & 7)
+    else
+        if isdirect(t)
+            sizeof(dt(t))
+        else
+            sizeof(ft(t))
+        end
+    end
 end
 
 
-
-####################################################################
-### string literal macros ##########################################
-####################################################################
-
-
-function offset(t::TinyToken)
-    mask = ((reinterpret(Int64,t.bits)>>63) & (UInt64(1)<<32 -1) # 0 for direct CU, 0xffffffff else
-    convert(UInt32,t.bits & mask)
-end
-
-function Base.ncodeunits(t::TinyToken)
-    # tricky code without jumps:
-    # 3 lowest bits of the size are always stored at bit position 56..58.
-    # if NONASCII_BIT is set, we have additional 24 bits for size at bits 32..55
-    # We build a mask for bits 32..55 all 1 (bit 63 set, data in buffer)
-    # or 0 (bit 63 clear, all data in token, size is 0..7)
-    # by arithmetic shift of bit 63. ANDing with t.bits and shift by 29 gives
-    # the high bits 3..26 of the size.
-    masksize = (reinterpret(Int64,t)>>31) & ((1<<24-1)<<32)
-    ((reinterpret(Int64,t)&masksize)>>>29) | ((reinterpret(Int64,t) >>>56) & 7)
-end
-
-
-function Base.cmp(a::TinyToken, b::TinyToken)
-    @boundscheck checktiny(a); checktiny(b)
+function Base.cmp(a::DirectToken, b::DirectToken)
     # both tiny: compare all code units in one step
-    (a.bits& 2^56-1) < (b.bits& (2^56-1)) && return -1
-    (a.bits& 2^56-1) > (b.bits& (2^56-1)) && return 1
+    (u64(a)&CODEUNIT_BITS) < (u64(b)&CODEUNIT_BITS) && return -1
+    (u64(a)&CODEUNIT_BITS) > (u64(b)&CODEUNIT_BITS) && return 1
     0
 end
 
@@ -500,16 +428,16 @@ end
 #########################################################
 
 
-category(t::TinyToken) = reinterpret(TCategory, UInt8((uint(t) >>>59)&15))
+category(t::TinyToken) = reinterpret(TCategory, UInt8((u64(t) >>>59)&15))
 
-category(t::DirectToken) = reinterpret(TCategory, UInt8(uint(t) >>>59))
+category(t::DirectToken) = reinterpret(TCategory, UInt8(u64(t) >>>59))
 
 
-isDirect(t::TinyToken) = reinterpret(Int64,t)>=0
+isdirect(t::TinyToken) = reinterpret(Int64,t)>=0
 
-isDirect(t::DirectToken) = true
+isdirect(t::DirectToken) = true
 
-isDirect(t::FlyToken) = false
+isdirect(t::FlyToken) = false
 
 
 #########################################################
@@ -519,33 +447,25 @@ isDirect(t::FlyToken) = false
 
 
 "throw an error if token references some buffer"
-function checktiny(t::TinyToken)
-    @boundscheck isDirect(t) || throw(ErrorException("TinyToken references unknown buffer: &t"))
+function checkdirect(t::HybridToken)
+    @boundscheck isdirect(t) || throw(ErrorException("required DirectToken, but HybridToken is no DirectToken: &t"))
     nothing
 end
 
-"throw an error if token category is out of bounds"
-function checkcategory(cat::Unsigned)
-    @boundscheck cat <= 15 || throw(ErrorException("Token category too large (max 15): &cat"))
-    nothing
-end
 
-"throw an error if token offset is out of bounds"
-function checkoffset(ofs::Unsigned)
-    @boundscheck ofs <= typemax(UInt32) || throw(ErrorException("token offset too large: &ofs"))
-    nothing
-end
+"""
+throw an error if token offset+size is out of bounds.
 
-"throw an error if token offset is out of bounds"
-function check_ofs_size(offset:: Unsigned, size:: Unsigned, limit::Unsigned)
-    @boundscheck offset <= limit || throw BoundsError(offset,limit)
-    @boundscheck offset+size <= bsize || throw BoundsError(offset+size,limit)
+limit is the total size if  of the buffer (offset,size) points into
+"""
+function check_ofs_size(offset:: UInt32, size:: UInt64, limit)
+    @boundscheck size+offset <= limit || throw BoundsError(offset+size,limit)
     nothing
 end
 
 
 "throw an error if token references some buffer"
-function checksize(size::Unsigned, maxsize=7))
+function checksize(size::Unsigned, maxsize))
     @boundscheck size <= maxsize || throw(ErrorException("too many code units: &size"))
 end
 
@@ -580,11 +500,6 @@ Base.show(io::IO, t::TinyToken)
 end
 
 
-
-function Base.isascii(t::TinyToken)
-    @boundscheck checktiny(t)
-    t.bits & nonasciibits == 0
-end
 
 @propagate_inbounds function Base.codeunit(t::TinyToken, i::Integer)
     @boundscheck 0 < i <= ncodeunits(t) || boundserr(t,i)

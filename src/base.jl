@@ -203,7 +203,7 @@ same symbol, e. g. "<>", "!=" and "≠" for inequality,
 and may replace different notations by one of the others.
 
 Symbols usually fit into a DirectToken. Consider to grant this in your
-application (and use DirectToken vor symbols).
+application (and use DirectToken for symbols).
 
 In TokenTree, symbols can have children, to reflect the use of symbols
 as operators in common computer languages.
@@ -340,9 +340,12 @@ end
 
 Base.codeunit(t::AbstractToken) = UInt8
 
-Base.sizeof(t::AbstractToken) = ncodeunits(t)
+Base.ncodeunits(t::AbstractToken) = sizeof(t)
 
-# simplified - true does not grant getindex returns a valid unicode
+
+# simplified implementation, assuming t is valid TUF8.
+# isvalid only checks current byte. It does not check if all code units
+# of the unicode character exist and have valid values.
 Base.isvalid(t::AbstractToken, i::Int) = codeunit(t, i) & 0xc0 != 0x80
 
 
@@ -404,4 +407,4 @@ boundserr(t,i) = throw(BoundsError(t,i))
 
 
 "an empty string buffer"
-const empty::String = ""
+const empty = ""

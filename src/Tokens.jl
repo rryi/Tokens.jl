@@ -1,5 +1,7 @@
 module Tokens
 
+using BitFlags
+
 include("base.jl")
 include("tinytoken.jl")
 export AbstractToken, TinyToken

@@ -23,7 +23,7 @@ Immutable token, either direct enoded or buffer based
 """
 struct Token <: TinyBufferToken
     tiny :: HybridToken # category, size, offset
-    buffer :: String # memory with token text data.
+    buffer :: String # memory with token text data or EMPTY
 end
 
 
@@ -38,19 +38,27 @@ struct BufferToken <: TinyBufferToken
     buffer :: String # memory with token text data.
 end
 
+#= maybe ... currently, not really helpful
+@bitflag BufferFlags ::UInt32 begin
+    TRYDIRECT # return kokens of size<8 as DirectToken
+
+    NONE = 0
+end
+=#
 
 """
-Mutable buffer, able to share its buffer with token
-and ['SubString']@ref instances
+like IObuffer, but able to share its buffer with token
+and ['SubString']@ref instances.
 
 
 
 """
-mutable struct SharedBuffer <: IO
+mutable struct IOshared <: IO
     buffer :: String # PRIVATE!! memory with token/substring text data.
     first :: UInt32 # read position offset of first not consumed byte
     free :: UInt32 # write position offset: offset of first unused byte
     shared :: UInt32 # last index in buffer shared with other objects (0 is valid)
+    #flags :: BufferFlags # processing
 end
 
 
@@ -83,7 +91,7 @@ isDirect(t::TinyBufferToken) = isDirect(t.tiny)
 
 isDirect(t::BufferToken) = false
 
-isDirect(t::MutableToken) = false
+#isDirect(t::MutableToken) = false
 
 
 
@@ -93,7 +101,30 @@ isDirect(t::MutableToken) = false
 ############## Base methods for tokens ##################
 #########################################################
 
-Base.ncodeunits(t::TinyBufferToken) = ncodeunits(t.tiny)
+Base.sizeof(t::TinyBufferToken) = sizeof(t.tiny)
+
+
+Base.cmp(a::Token, b::DirectToken) = isdirect(a.tiny) ? cmp(a.tiny,b) : cmp_codeunits(a,b)
+
+Base.cmp(a::DirectToken, b::Token) = isdirect(b.tiny) ? cmp(a,b.tiny) : cmp_codeunits(a,b)
+
+Base.cmp(a::Token, b::Token) = reinterpret(Int64,u64(a.tiny)|u64(b.tiny))>=0 ? cmp(a.tiny,b.tiny) : cmp_codeunits(a,b)
+
+
+    if isdirect(a.tiny)
+        cmp(a.tiny,b)
+    else
+        cmp_codeunits(a,b)
+    endif
+end
+function Base.cmp(a::Token, b::DirectToken)
+    if isdirect(a.tiny)
+        cmp(a.tiny,b)
+    else
+        cmp_codeunits(a,b)
+    endif
+end
+
 
 
 function Base.SubString(t::TinyBufferToken,i::Int, j::Int)
