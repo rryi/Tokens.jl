@@ -82,7 +82,3 @@ struct Words32
        end
 a=UInt64(0x123456789abcdef0)
 b=reinterpret(Words32,a)
-
-
-
-type t2 = Tuple{int32,Int32}

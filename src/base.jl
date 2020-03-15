@@ -376,13 +376,11 @@ end
 =#
 
 
+#TODO dump impl.?
+"show tokens as custom string constant without token type"
 function Base.show(io::IO,t::AbstractToken)
-    print(io,'^',category(t))
-    tshort = t
-    if ncodeunits(t)>30
-        tshort = subtoken(t,1,30) * "..."
-    end
-    Base.print_quoted(io, tshort)
+    print(io,category(t))
+    Base.print_quoted(io, t)
 end
 
 
@@ -407,4 +405,4 @@ boundserr(t,i) = throw(BoundsError(t,i))
 
 
 "an empty string buffer"
-const empty = ""
+const EMPTYSTRING = ""

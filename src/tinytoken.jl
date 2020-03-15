@@ -416,6 +416,12 @@ function Base.sizeof(t::HybridToken)
 end
 
 
+function Base.codeunit(t::DirectToken, index::Integer)
+    @boundscheck(t,i)
+    UInt8(UInt8(255) & (u64(t) >>> ((7-index)<<3)))
+end
+
+
 function Base.cmp(a::DirectToken, b::DirectToken)
     # both tiny: compare all code units in one step
     (u64(a)&CODEUNIT_BITS) < (u64(b)&CODEUNIT_BITS) && return -1
@@ -464,6 +470,14 @@ function check_ofs_size(offset:: UInt32, size:: UInt64, limit)
 end
 
 
+function Base.checkbounds(t:AbstractToken, i:Integer)
+    if (i<=0) || (i > offset(t)+sizeof(t)))
+        throw BoundsError(t,i)
+    end
+    nothing
+end
+
+
 "throw an error if token references some buffer"
 function checksize(size::Unsigned, maxsize))
     @boundscheck size <= maxsize || throw(ErrorException("too many code units: &size"))
@@ -488,17 +502,6 @@ function subtoken(t::T<:AbstractToken, first::Int, last::Int) = T(t,first,last)
     end
 
 end
-
-
-Base.show(io::IO, t::TinyToken)
-    print(io,'^',category(t))
-    if t.bits>=0
-        Base.print_quoted(io, t)
-    else
-        print(io,"$[ofs=",offset(t),",n=",ncodeunits(t),']')
-    end
-end
-
 
 
 @propagate_inbounds function Base.codeunit(t::TinyToken, i::Integer)

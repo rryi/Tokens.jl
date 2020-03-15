@@ -5,19 +5,43 @@ common supertype for all token vectors.
 
 
 """
-abstract type AbstractTokenVector{T <: TinyToken} <: AbstractVector{Token}
+abstract type AbstractTokenVector{T <: TinyToken} <: AbstractVector{AbstractToken}
 end
 
 """
-Memory-efficient array of tokens.
+Memory-efficient vector of tokens.
+
+On write access, all tokens with code unit count below 8 are stored as
+[`DirectToken`](@ref).
+
+Use this type if you expect a large percentage of tokens having less than
+8 code units. If performance matters more than memory efficiency, benchmark
+against [`BufferTokenVector`](@ref). Though TokenVector induces additional
+conditional code to test if a token is of type DirectToken, it can be faster,
+due to better memory locality and cache efficiency.
+"""
+struct TokenVector <: AbstractVector{Token}
+    vec :: Vector{HybridToken}
+    data :: IOShared
+end
 
 """
-mutable struct PTokenVector{T <: TinyToken} <: AbstractTokenVector{T <: TinyToken}
-    vec :: Vector{T}
-    buffer :: String # private storage shared by all elements
-    used :: UInt32 # no of bytes currently used
-    shared :: UInt32 # no of bytes in buffer shared with other objects
-    flags :: Int
+token vector for larger tokens.
+
+All token content is stored in a separate buffer, no DirectToken use.
+Because memory usage is always higher than [`TokenVector`](@ref), the
+only reason to use it is higher performance. Performance highly depends on
+your usage pattern - it needs to be benchmarked. Indicators for a better
+performance of BufferTokenVector are
+
+## low percentage of short tokens (code unit count below 8)
+## Frequent conversion from token to SubString
+## Frequent access to ncodeunits(token) without actually accessing code units
+
+"""
+struct BufferTokenVector <: AbstractVector{BufferToken}
+    vec :: Vector{FlyToken}
+    data :: IOShared
 end
 
 

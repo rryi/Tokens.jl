@@ -14,8 +14,6 @@ abstract type TinyBufferToken <: AbstractToken
 end
 
 
-
-
 """
 Recommended general-purpose Token implementation.
 
@@ -23,10 +21,24 @@ Immutable token, either direct enoded or buffer based
 """
 struct Token <: TinyBufferToken
     tiny :: HybridToken # category, size, offset
-    buffer :: String # memory with token text data or EMPTY
+    buffer :: String # memory with token text data or EMPTYSTRING
 end
 
+Token(t::BufferToken) = Token(ht(t.tiny),t.buffer)
 
+Token(t::DirectToken) = Token (ht(t),EMPTYSTRING)
+
+
+@propagate_inbounds function Token(cat:TCategory, s::Utf8String, direct::Bool=false)
+    size = s.ncodeunits
+    if direct && (size <= MAX_DIRECT_SIZE)
+        Token(ht(DirectToken(cat,s)),EMPTYSTRING)
+    else
+        Token(BufferToken(cat,s))
+#        @boundscheck checksize(size,MAX_TOKEN_SIZE)
+#        @inbounds Token(ht(FlyToken(cat,s.offset,size)),s.string)
+    end
+end
 
 """
 Immutable token, always buffer based
@@ -38,6 +50,27 @@ struct BufferToken <: TinyBufferToken
     buffer :: String # memory with token text data.
 end
 
+BufferToken(t::DirectToken) = BufferToken(FlyToken(category(t),sizeof(t)),string(t))
+
+function BufferToken(t::Token)
+    if isdirect(t)
+        BufferToken(dt(t.tiny))
+    else
+        BufferToken(ft(t.tiny),t.buffer)
+    end
+end
+
+function BufferToken(cat:TCategory, s:SubString{String})
+    BufferToken(FlyToken(cat,s.offset,s.ncodeunits),s.string)
+end
+
+function BufferToken(cat:TCategory, s:String)
+    BufferToken(FlyToken(cat,ncodeunits(s)),s)
+end
+
+
+
+
 #= maybe ... currently, not really helpful
 @bitflag BufferFlags ::UInt32 begin
     TRYDIRECT # return kokens of size<8 as DirectToken
@@ -45,21 +78,6 @@ end
     NONE = 0
 end
 =#
-
-"""
-like IObuffer, but able to share its buffer with token
-and ['SubString']@ref instances.
-
-
-
-"""
-mutable struct IOshared <: IO
-    buffer :: String # PRIVATE!! memory with token/substring text data.
-    first :: UInt32 # read position offset of first not consumed byte
-    free :: UInt32 # write position offset: offset of first unused byte
-    shared :: UInt32 # last index in buffer shared with other objects (0 is valid)
-    #flags :: BufferFlags # processing
-end
 
 
 
@@ -89,13 +107,6 @@ category(t::TinyBufferToken) = category(t.tiny)
 
 isDirect(t::TinyBufferToken) = isDirect(t.tiny)
 
-isDirect(t::BufferToken) = false
-
-#isDirect(t::MutableToken) = false
-
-
-
-
 
 #########################################################
 ############## Base methods for tokens ##################
@@ -110,21 +121,33 @@ Base.cmp(a::DirectToken, b::Token) = isdirect(b.tiny) ? cmp(a,b.tiny) : cmp_code
 
 Base.cmp(a::Token, b::Token) = reinterpret(Int64,u64(a.tiny)|u64(b.tiny))>=0 ? cmp(a.tiny,b.tiny) : cmp_codeunits(a,b)
 
+Base.convert(::Type{BufferToken}, s::SubString{String}) = BufferToken(T_TEXT,s)
 
-    if isdirect(a.tiny)
-        cmp(a.tiny,b)
+Base.convert(::Type{Token}, s::SubString{String}) = Token(T_TEXT,s)
+
+
+function Base.codeunit(t::TinyBufferToken, i::Integer)
+    if isdirect(t.tiny)
+        codeunit(dt(t.tiny),i)
     else
-        cmp_codeunits(a,b)
-    endif
-end
-function Base.cmp(a::Token, b::DirectToken)
-    if isdirect(a.tiny)
-        cmp(a.tiny,b)
-    else
-        cmp_codeunits(a,b)
-    endif
+        @boundscheck checkbounds(t, i)
+        @inbounds return codeunit(s.string, s.offset + i)
+    end
 end
 
+function Base.iterate(s::TinyBufferToken, i::Integer=firstindex(s))
+    i == ncodeunits(s)+1 && return nothing
+    @boundscheck checkbounds(s, i)
+    y = iterate(s.string, s.offset + i)
+    y === nothing && return nothing
+    c, i = y
+    return c, i - s.offset
+end
+
+function getindex(s::SubString, i::Integer)
+    @boundscheck checkbounds(s, i)
+    @inbounds return getindex(s.string, s.offset + i)
+end
 
 
 function Base.SubString(t::TinyBufferToken,i::Int, j::Int)
