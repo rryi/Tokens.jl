@@ -471,7 +471,7 @@ end
 
 
 function Base.checkbounds(t:AbstractToken, i:Integer)
-    if (i<=0) || (i > offset(t)+sizeof(t)))
+    @boundscheck if (i<=0) || (i > offset(t)+sizeof(t)))
         throw BoundsError(t,i)
     end
     nothing

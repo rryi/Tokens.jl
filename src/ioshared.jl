@@ -6,65 +6,68 @@
 
 const MaybeIO = Union{IO,Nothing}
 
-mutable struct IOShared{T} where T <: MaybeIO <: IO
+mutable struct IOShared{T <: MaybeIO} <: IO
     buffer :: String # PRIVATE!! memory with token/substring text data.
-    skip :: UInt32 # read position offset: number of consumed bytes
-    free :: UInt32 # size and append position offset
+    ptr :: UInt32 # read position offset / number of consumed bytes
+    size :: UInt32 # size and append position offset
     shared :: UInt32 # last index in buffer shared with other objects (0 is valid)
     limit ::  UInt32 # total number of bytes in buffer
     preferredlimit ::  UInt32 # limit in case of reallocation due to sharing
     flushable :: Bool # true: io is target for flush. false: io is source for fill
-    io::T # if not nothing, if flushable: target for flush else source for fill
-
-    function IOShared(limit::Integer,flushable::Bool=false,io::MaybeIO=nothing)
-        new(_string_n(limit),0,0,0,limit,limit,flushable,io)
+    io::T # nothing or if flushable: target for flush else: source for fill
+    function IOShared{T}(limit::UInt32,flushable::Bool,io::T) where T <: MaybeIO
+        z = zero(UInt32)
+        new(_string_n(limit),z,z,z,limit,limit,flushable,io)
     end
-    function IOShared(io::IOShared)
-        new(share!(io,io.free),io.skip,io.free,io.limit,io.limit,nothing,false)
-    end
-    function IOShared(s::String)
-        size = UInt32(ncodeunits(s))
-        new(s,0,size,size,size,size)
-    end
-    function IOShared(s::SubString{String})
-        ofs = s.offset
-        size = s.ncodeunits+ofs
-        lim = ncodeunits(s.string)
-        new(s.string,ofs,size,lim,lim,size)
-    end
-    function IOShared(t:BufferToken)
-        ofs = offset(t.tiny)
-        fre = ofs + sizeof(t.tiny)
-        lim = UInt32(sizeof(t.buffer))
-        new(t.buffer,ofs,fre,lim,sizeof(t.tiny))
+    function IOShared{Nothing}(offset::UInt32, count::UInt32, s::String)
+        size = offset+count
+        limit = UInt32(ncodeunits(s)) # check on overflow necessary: cannot handle too long strings
+        @boundscheck check_ofs_size(offset,count,limit)
+        new(s,offset,size,limit,limit,count,false,nothing)
     end
 end
 
+IOShared(s::SubString{String}) = IOShared{Nothing}(UInt32(s.offset),UInt32(s.ncodeunits),s.string)
+
+IOShared(s::String) = IOShared{Nothing}(zero(UInt32),UInt32(ncodeunits(s)),s)
+
+IOShared(t::BufferToken) = IOShared{Nothing}(offset(t.tiny),UInt32(sizeof(t.tiny)),t.buffer)
+
+IOShared(io::IOShared{Nothing}) = IOShared{Nothing}(io.ptr,io.size-io.ptr,share!(io,io.size))
+
+
 """
-return a readonly buffer reference, size bytes guaranteed not to change
+return a readonly buffer reference, share bytes guaranteed not to change
 """
-function share!(io::IOShared,size::UInt32)
-    if (io.shared<size)
-        io.shared = size
+function share!(io::IOShared,share::UInt32)
+    if (io.shared<share)
+        io.shared = share
+    end
+    io.buffer
+end
+
+function share!(io::IOShared) = share!(io,io.limit)
+    if (io.shared<share)
+        io.shared = share
     end
     io.buffer
 end
 
 
-copy(b::IOshare) = IOShared(b)
+copy(b::IOShared{Nothing}) = IOShared(b)
 
 function show(io::IO, b::IOShared)
-    print(io,   "IOShared(  skip=",b.skip,
-                ", free=", b.free,
+    print(io,   "IOShared(  ptr=",b.ptr,
+                ", size=", b.size,
                 ", shared=", b.shared,
                 ", limit=", b.limit,
                 ", '")
-    len = free-skip
+    len = size-ptr
     if len<=11
-        print(io,SubString(buffer,skip+1,skip+len))
+        print(io,SubString(buffer,ptr+1,ptr+len))
     else
-        print(io,SubString(buffer,skip+1,skip+5)),
-        '~',SubString(buffer,free-4,free))
+        print(io,SubString(buffer,ptr+1,ptr+5)),
+        '~',SubString(buffer,size-4,size))
     end
     print(io,"')")
 end
@@ -79,8 +82,8 @@ function unsafe_read(from::GenericIOBuffer, p::Ptr{UInt8}, nb::UInt)
     from.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
     avail = bytesavailable(from)
     adv = min(avail, nb)
-    GC.@preserve from unsafe_copyto!(p, pointer(from.data, from.skip), adv)
-    from.skip += adv
+    GC.@preserve from unsafe_copyto!(p, pointer(from.data, from.ptr), adv)
+    from.ptr += adv
     if nb > avail
         throw(EOFError())
     end
@@ -95,10 +98,10 @@ function read(from::GenericIOBuffer, T::Union{Type{Int16},Type{UInt16},Type{Int3
         throw(EOFError())
     end
     GC.@preserve from begin
-        ptr::Ptr{T} = pointer(from.data, from.skip)
+        ptr::Ptr{T} = pointer(from.data, from.ptr)
         x = unsafe_load(ptr)
     end
-    from.skip += nb
+    from.ptr += nb
     return x
 end
 
@@ -121,22 +124,22 @@ end
 
 @inline function read(from::IOShared, ::Type{UInt8})
     from.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
-    skip = from.skip
-    free = from.free
-    if skip > free
+    ptr = from.ptr
+    size = from.size
+    if ptr > size
         throw(EOFError())
     end
-    @inbounds byte = codeunit(from.buffer,skip+1)
-    from.skip = skip + 1
+    @inbounds byte = codeunit(from.buffer,ptr+1)
+    from.ptr = ptr + 1
     return byte
 end
 
 function peek(from::GenericIOBuffer)
     from.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
-    if from.skip > from.free
+    if from.ptr > from.size
         throw(EOFError())
     end
-    return from.data[from.skip]
+    return from.data[from.ptr]
 end
 
 read(from::GenericIOBuffer, ::Type{Ptr{T}}) where {T} = convert(Ptr{T}, read(from, UInt))
@@ -146,14 +149,14 @@ iswritable(io::GenericIOBuffer) = io.writable
 
 # TODO: GenericIOBuffer is not iterable, so doesn't really have a length.
 # This should maybe be sizeof() instead.
-#length(io::GenericIOBuffer) = (io.seekable ? io.free : bytesavailable(io))
-bytesavailable(io::GenericIOBuffer) = io.free - io.skip + 1
-position(io::GenericIOBuffer) = io.skip-1
+#length(io::GenericIOBuffer) = (io.seekable ? io.size : bytesavailable(io))
+bytesavailable(io::GenericIOBuffer) = io.size - io.ptr + 1
+position(io::GenericIOBuffer) = io.ptr-1
 
 function skip(io::GenericIOBuffer, n::Integer)
-    seekto = io.skip + n
+    seekto = io.ptr + n
     n < 0 && return seek(io, seekto-1) # Does error checking
-    io.skip = min(seekto, io.free+1)
+    io.ptr = min(seekto, io.size+1)
     return io
 end
 
@@ -164,14 +167,14 @@ function seek(io::GenericIOBuffer, n::Integer)
     end
     # TODO: REPL.jl relies on the fact that this does not throw (by seeking past the beginning or end
     #       of an GenericIOBuffer), so that would need to be fixed in order to throw an error here
-    #(n < 0 || n > io.free) && throw(ArgumentError("Attempted to seek outside IOBuffer boundaries."))
-    #io.skip = n+1
-    io.skip = max(min(n+1, io.free+1), 1)
+    #(n < 0 || n > io.size) && throw(ArgumentError("Attempted to seek outside IOBuffer boundaries."))
+    #io.ptr = n+1
+    io.ptr = max(min(n+1, io.size+1), 1)
     return io
 end
 
 function seekend(io::GenericIOBuffer)
-    io.skip = io.free+1
+    io.ptr = io.size+1
     return io
 end
 
@@ -183,9 +186,9 @@ function truncate(io::GenericIOBuffer, n::Integer)
     if n > length(io.data)
         resize!(io.data, n)
     end
-    io.data[io.free+1:n] .= 0
-    io.free = n
-    io.skip = min(io.skip, n+1)
+    io.data[io.size+1:n] .= 0
+    io.size = n
+    io.ptr = min(io.ptr, n+1)
     ismarked(io) && io.mark > n && unmark(io)
     return io
 end
@@ -194,17 +197,17 @@ function compact(io::GenericIOBuffer)
     io.writable || throw(ArgumentError("compact failed, IOBuffer is not writeable"))
     io.seekable && throw(ArgumentError("compact failed, IOBuffer is seekable"))
     local ptr::Int, bytes_to_move::Int
-    if ismarked(io) && io.mark < io.skip
+    if ismarked(io) && io.mark < io.ptr
         if io.mark == 0 return end
         ptr = io.mark
-        bytes_to_move = bytesavailable(io) + (io.skip-io.mark)
+        bytes_to_move = bytesavailable(io) + (io.ptr-io.mark)
     else
-        ptr = io.skip
+        ptr = io.ptr
         bytes_to_move = bytesavailable(io)
     end
     copyto!(io.data, 1, io.data, ptr, bytes_to_move)
-    io.free -= ptr - 1
-    io.skip -= ptr - 1
+    io.size -= ptr - 1
+    io.ptr -= ptr - 1
     io.mark -= ptr - 1
     return io
 end
@@ -214,13 +217,13 @@ end
     io.writable || throw(ArgumentError("ensureroom failed, IOBuffer is not writeable"))
     if !io.seekable
         nshort >= 0 || throw(ArgumentError("ensureroom failed, requested number of bytes must be ≥ 0, got $nshort"))
-        if !ismarked(io) && io.skip > 1 && io.free <= io.skip - 1
-            io.skip = 1
-            io.free = 0
+        if !ismarked(io) && io.ptr > 1 && io.size <= io.ptr - 1
+            io.ptr = 1
+            io.size = 0
         else
-            datastart = ismarked(io) ? io.mark : io.skip
-            if (io.free+nshort > io.limit) ||
-                (datastart > 4096 && datastart > io.free - io.skip) ||
+            datastart = ismarked(io) ? io.mark : io.ptr
+            if (io.size+nshort > io.limit) ||
+                (datastart > 4096 && datastart > io.size - io.ptr) ||
                 (datastart > 262144)
                 # apply somewhat arbitrary heuristics to decide when to destroy
                 # old, read data to make more room for new data
@@ -228,22 +231,22 @@ end
             end
         end
     end
-    n = min(nshort + (io.append ? io.free : io.skip-1), io.limit)
+    n = min(nshort + (io.append ? io.size : io.ptr-1), io.limit)
     if n > length(io.data)
         resize!(io.data, n)
     end
     return io
 end
 
-eof(io::GenericIOBuffer) = (io.skip-1 == io.free)
+eof(io::GenericIOBuffer) = (io.ptr-1 == io.size)
 
 @noinline function close(io::GenericIOBuffer{T}) where T
     io.readable = false
     io.writable = false
     io.seekable = false
-    io.free = 0
+    io.size = 0
     io.limit = 0
-    io.skip = 1
+    io.ptr = 1
     io.mark = -1
     if io.writable
         resize!(io.data, 0)
@@ -273,15 +276,15 @@ julia> String(take!(io))
 function take!(io::GenericIOBuffer)
     ismarked(io) && unmark(io)
     if io.seekable
-        nbytes = io.free
+        nbytes = io.size
         data = copyto!(StringVector(nbytes), 1, io.data, 1, nbytes)
     else
         nbytes = bytesavailable(io)
         data = read!(io,StringVector(nbytes))
     end
     if io.writable
-        io.skip = 1
-        io.free = 0
+        io.ptr = 1
+        io.size = 0
     end
     return data
 end
@@ -295,32 +298,32 @@ function take!(io::IOBuffer)
         else
             data = copy(data)
         end
-        resize!(data,io.free)
+        resize!(data,io.size)
     else
         nbytes = bytesavailable(io)
         a = StringVector(nbytes)
         data = read!(io, a)
     end
     if io.writable
-        io.skip = 1
-        io.free = 0
+        io.ptr = 1
+        io.size = 0
     end
     return data
 end
 
 function write(to::GenericIOBuffer, from::GenericIOBuffer)
     if to === from
-        from.skip = from.free + 1
+        from.ptr = from.size + 1
         return 0
     end
-    written::Int = write_sub(to, from.data, from.skip, bytesavailable(from))
-    from.skip += written
+    written::Int = write_sub(to, from.data, from.ptr, bytesavailable(from))
+    from.ptr += written
     return written
 end
 
 function unsafe_write(to::GenericIOBuffer, p::Ptr{UInt8}, nb::UInt)
     ensureroom(to, nb)
-    ptr = (to.append ? to.free+1 : to.skip)
+    ptr = (to.append ? to.size+1 : to.ptr)
     written = Int(min(nb, length(to.data) - ptr + 1))
     towrite = written
     d = to.data
@@ -330,9 +333,9 @@ function unsafe_write(to::GenericIOBuffer, p::Ptr{UInt8}, nb::UInt)
         p += 1
         towrite -= 1
     end
-    to.free = max(to.free, ptr - 1)
+    to.size = max(to.size, ptr - 1)
     if !to.append
-        to.skip += written
+        to.ptr += written
     end
     return written
 end
@@ -347,15 +350,15 @@ end
 
 @inline function write(to::GenericIOBuffer, a::UInt8)
     ensureroom(to, UInt(1))
-    ptr = (to.append ? to.free+1 : to.skip)
+    ptr = (to.append ? to.size+1 : to.ptr)
     if ptr > to.limit
         return 0
     else
         to.data[ptr] = a
     end
-    to.free = max(to.free, ptr)
+    to.size = max(to.size, ptr)
     if !to.append
-        to.skip += 1
+        to.ptr += 1
     end
     return sizeof(UInt8)
 end
@@ -374,14 +377,14 @@ readavailable(io::GenericIOBuffer) = read(io)
 read(io::GenericIOBuffer, nb::Integer) = read!(io,StringVector(min(nb, bytesavailable(io))))
 
 function occursin(delim::UInt8, buf::IOBuffer)
-    p = pointer(buf.data, buf.skip)
+    p = pointer(buf.data, buf.ptr)
     q = GC.@preserve buf ccall(:memchr,Ptr{UInt8},(Ptr{UInt8},Int32,Csize_t),p,delim,bytesavailable(buf))
     return q != C_NULL
 end
 
 function occursin(delim::UInt8, buf::GenericIOBuffer)
     data = buf.data
-    for i = buf.skip:buf.free
+    for i = buf.ptr:buf.size
         @inbounds b = data[i]
         b == delim && return true
     end
@@ -394,7 +397,7 @@ function readuntil(io::GenericIOBuffer, delim::UInt8; keep::Bool=false)
     nread = 0
     nout = 0
     data = io.data
-    for i = io.skip : io.free
+    for i = io.ptr : io.size
         @inbounds b = data[i]
         nread += 1
         if keep || b != delim
@@ -409,28 +412,28 @@ function readuntil(io::GenericIOBuffer, delim::UInt8; keep::Bool=false)
             break
         end
     end
-    io.skip += nread
+    io.ptr += nread
     if lb != nout
         resize!(A, nout)
     end
     A
 end
 
-# copy-free crc32c of IOBuffer:
+# copy-size crc32c of IOBuffer:
 function _crc32c(io::IOBuffer, nb::Integer, crc::UInt32=0x00000000)
     nb < 0 && throw(ArgumentError("number of bytes to checksum must be ≥ 0"))
     io.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
     n = min(nb, bytesavailable(io))
     n == 0 && return crc
-    crc = GC.@preserve io unsafe_crc32c(pointer(io.data, io.free), n, crc)
-    io.free += n
+    crc = GC.@preserve io unsafe_crc32c(pointer(io.data, io.size), n, crc)
+    io.size += n
     return crc
 end
 _crc32c(io::IOBuffer, crc::UInt32=0x00000000) = _crc32c(io, bytesavailable(io), crc)
 
 
 function Base.checkbounds(io:IOshared, i:Integer)
-    if (i<=0) || (i > io.free)
+    if (i<=0) || (i > io.size)
         throw BoundsError(io,i)
     end
     nothing
