@@ -3,10 +3,15 @@ module Tokens
 using BitFlags
 
 include("base.jl")
+export AbstractToken, offset, isdirect, category, TCategory
+# all TCategory values and its string macros are exported by base.jl
+export subtoken, EMPTYSTRING
+
 include("tinytoken.jl")
-export AbstractToken, TinyToken
+export TinyToken, FlyToken, DirectToken, HybridToken
+
 include("token.jl")
-export Token, MutableToken
+export Token, BufferToken
 #using TreeOnVectors
 include("tokenvector.jl")
 export TokenVector, TokenTree

@@ -95,7 +95,7 @@ end
 
 true if t stores its code units directly in its TinyToken.
 """
-function isDirect(t::AbstractToken)
+function isdirect(t::AbstractToken)
     throw(MethodError(offset, (t,)))
 end
 
@@ -260,7 +260,7 @@ generates a DirectToken(T_INT,"123").
 
 
 """
-@enum TCategory :: UInt8
+@enum TCategory :: UInt8 begin
     T_WHITE = 0
     T_IDENT = 1
     T_SPECIAL = 2
@@ -290,6 +290,44 @@ for cat in instances(TCategory)
             end
         end
     end)
+    export Symbol(cat), @Symbol(Symbol(cat),"_str")
+end
+
+
+"""
+    subtoken(offset::UInt32, size::UInt64, t::T<:AbstractToken)
+
+central method to construct a new token of the same type which
+holds a sequence of code units of its source t.
+
+It uses an (offset::UInt32,size::UInt64) pair to specify the
+code units in the result: skips offset code units and keeps the
+following size code units in a newly constructed token.
+
+In most cases, it is a "view" operation like SubString
+construction. Exceptions are very short sequences for token
+types which allow for direct encoding without buffer.
+
+Specifying concrete Integer subtypes may look uncommon to
+Julia, but is for safety and efficieny: in most token
+operations, it is exactly the integer type needed, and having
+different types for offset and size reduces the risk that these
+parameters are mixed-up: it is difficult enough for the user
+to distinguish the common string (first,last) index notation
+from the performance-oriented lowlevel (offset,size) code unit
+segment notation. The need for explicit conversion of offset and
+size hopefully helps to to avoid mix-up.
+
+There is another subtoken method which uses an (first,last)
+character index sequence like usual String and SubString
+operations. The (offset,size) oriented operation is faster than
+the form subtoken(t,first,last) , but less safe: you can construct
+tokens which are no valid strings, because there is no check
+whether t[offset+1] is a valid character index or
+codeunit(t,offset+size) is the last code unit of a character.
+"""
+subtoken(offset::UInt32, size::UInt64, t::T<:AbstractToken)
+    T(offset,size,t)
 end
 
 
@@ -298,11 +336,19 @@ end
 
 Like SubString with same parameters, but returns
 a new token of same type with the same category
-and content SubString(t,first,last)
+and content SubString(string(t),first,last).
 
 """
-subtoken(t::T<:AbstractToken, first::Int, last::Int) = T(t,first,last)
-
+subtoken(t::AbstractToken, first::Int, last::Int)
+    first ≤ last || return T(0,0,t)
+    @boundscheck begin
+        checkbounds(t, first:last)
+        @inbounds isvalid(t, first) || string_index_err(t, first)
+        @inbounds isvalid(t, last) || string_index_err(t, last)
+    end
+    nextlast = nextind(t,last)
+    subtoken(UInt32(first)-1,UInt64(nextlast-first),t)
+end
 
 
 #= try with default implementation, using isvalid ...
