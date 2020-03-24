@@ -1,4 +1,4 @@
-## Token, MutableToken implementations
+## complete (buffered) token implementations
 
 
 """
@@ -17,19 +17,24 @@ end
 """
 Recommended general-purpose Token implementation.
 
-Immutable token, either direct enoded or buffer based
+Immutable token, either direct enoded or buffer based.
 """
 struct Token <: TinyBufferToken
     tiny :: HybridToken # category, size, offset
     buffer :: String # memory with token text data or EMPTYSTRING
+    Token(t::DirectToken) = new(ht(t),EMPTYSTRING)
+    Token(t::BufferToken) = new(ht(t.tiny),t.buffer)
+    @propagate_inbounds function Token(
+        cat::TCategory,offset::UInt32, size::UInt64, s::String, direct::Bool)
+        if direct && (size<=MAX_DIRECT_SIZE)
+            new(ht(DirectToken(cat,offset,size,s)),EMPTYBUFFER)
+        else
+            @boundscheck check_ofs_size(offset,size,ncodeunits(s)
+            new(ht(FlyToken(cat,offset,size)),s)
+    end
 end
 
-Token(t::BufferToken) = Token(ht(t.tiny),t.buffer)
-
-Token(t::DirectToken) = Token (ht(t),EMPTYSTRING)
-
-
-@propagate_inbounds function Token(cat:TCategory, s::Utf8String, direct::Bool=false)
+@propagate_inbounds function Token(cat::TCategory, s::Utf8String, direct::Bool=false)
     size = s.ncodeunits
     if direct && (size <= MAX_DIRECT_SIZE)
         Token(ht(DirectToken(cat,s)),EMPTYSTRING)
@@ -48,27 +53,26 @@ Use this type if you expect most token sizes to be above 7
 struct BufferToken <: TinyBufferToken
     tiny :: FlyToken # category, size, offset
     buffer :: String # memory with token text data.
-end
-
-BufferToken(t::DirectToken) = BufferToken(FlyToken(category(t),sizeof(t)),string(t))
-
-function BufferToken(t::Token)
-    if isdirect(t)
-        BufferToken(dt(t.tiny))
-    else
-        BufferToken(ft(t.tiny),t.buffer)
+    BufferToken(t::DirectToken) = new(ft(t),string(t))
+    function BufferToken(t::Token)
+        if isdirect(t)
+            BufferToken(dt(t.tiny))
+        else
+            new(ft(t.tiny),t.buffer)
+        end
+    end
+    function BufferToken(cat:TCategory, s:String)
+        new(FlyToken(cat,ncodeunits(s)%UInt64),s)
+    end
+    @propagate_inbounds function BufferToken(
+        cat::TCategory,offset::UInt32, size::UInt64, s::String)
+        @boundscheck check_ofs_size(offset,size,s)
+        new(FlyToken(cat,offset,size),s)
+    end
+    function BufferToken(cat::TCategory,s::SubString{String})
+        new(FlyToken(cat,UInt32(s.offset),s.ncodeunits%UInt64),s.string)
     end
 end
-
-function BufferToken(cat:TCategory, s:SubString{String})
-    BufferToken(FlyToken(cat,s.offset,s.ncodeunits),s.string)
-end
-
-function BufferToken(cat:TCategory, s:String)
-    BufferToken(FlyToken(cat,ncodeunits(s)),s)
-end
-
-
 
 
 #= maybe ... currently, not really helpful

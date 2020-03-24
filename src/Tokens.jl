@@ -1,6 +1,6 @@
 module Tokens
 
-using BitFlags
+#using BitFlags
 
 include("base.jl")
 export AbstractToken, offset, isdirect, category, TCategory

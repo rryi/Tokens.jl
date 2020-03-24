@@ -257,8 +257,6 @@ T_INT"123"
 
 generates a DirectToken(T_INT,"123").
 
-
-
 """
 @enum TCategory :: UInt8 begin
     T_WHITE = 0
@@ -326,9 +324,8 @@ tokens which are no valid strings, because there is no check
 whether t[offset+1] is a valid character index or
 codeunit(t,offset+size) is the last code unit of a character.
 """
-subtoken(offset::UInt32, size::UInt64, t::T<:AbstractToken)
-    T(offset,size,t)
-end
+subtoken(offset::UInt32, size::UInt64, t::T<:AbstractToken) = T(offset,size,t)
+
 
 
 """
@@ -389,7 +386,7 @@ Base.codeunit(t::AbstractToken) = UInt8
 Base.ncodeunits(t::AbstractToken) = sizeof(t)
 
 
-# simplified implementation, assuming t is valid TUF8.
+# simplified implementation, assuming t is valid UTF8.
 # isvalid only checks current byte. It does not check if all code units
 # of the unicode character exist and have valid values.
 Base.isvalid(t::AbstractToken, i::Int) = codeunit(t, i) & 0xc0 != 0x80
@@ -401,7 +398,7 @@ function cmp_codeunits(a::Utf8String, b::Utf8String)
     al, bl = sizeof(a), sizeof(b)
     ml = min(al, bl)
     i = 1
-    while i<=ml
+    @inbounds while i<=ml
         ai = codeunit(a,i)
         bi = codeunit(b,i)
         ai < bi && return -1
@@ -433,7 +430,7 @@ end
 function Base.write(io::IO, t::AbstractToken)
     i = 1
     n = ncodeunits(t)
-    while (i<=n)
+    @inbounds while (i<=n)
         write(io,codeunit(t,i))
         i += 1
     end
@@ -446,6 +443,7 @@ end
 #########################################################
 
 
+# TODO delete
 "helper function: bounds check failure"
 boundserr(t,i) = throw(BoundsError(t,i))
 

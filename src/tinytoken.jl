@@ -50,6 +50,9 @@ A flyweight data structure for an immutable Token.
 All subtypes must be 64 bit primitive data types which implement a certain
 bitmap layout and methods for processing it.
 
+TinyToken implementations may throw an error if a Token API method requires
+a buffer and no buffer is supplied to the method
+
 """
 abstract type TinyToken <: AbstractToken
 
@@ -115,10 +118,10 @@ with explicitly associated buffer.
 
 There are two reasons why a code unit buffer parameter is not present:
 
-(a) function does not access code units, like *ncodeunits*, *category*
+(a) method does not access code units, like *ncodeunits*, *category*
 or *isdirect*.
 
-(b) function needs code unit access, and knows the buffer from its context.
+(b) method needs code unit access, and knows the buffer from its context.
 
 
 Memory layout:
@@ -417,8 +420,24 @@ end
 
 
 function Base.codeunit(t::DirectToken, index::Integer)
-    @boundscheck(t,i)
+    @boundscheck checkbounds(t,index)
     UInt8(UInt8(255) & (u64(t) >>> ((7-index)<<3)))
+end
+
+
+function Base.codeunit(t::TinyToken, index::Integer)
+    isdirect(t) || error("code unit buffer not available in codeunit($t,$index)")
+    codeunit(dt(t),index)
+end
+
+
+function Base.show(io::IO,t::TinyToken)
+    print(io,category(t))
+    if isdirect(t)
+        Base.print_quoted(io, t)
+    else
+        print(io,'<',offset(t),',',sizeof(t),'>')
+    end
 end
 
 
@@ -438,7 +457,6 @@ category(t::TinyToken) = reinterpret(TCategory, UInt8((u64(t) >>>59)&15))
 
 category(t::DirectToken) = reinterpret(TCategory, UInt8(u64(t) >>>59))
 
-
 isdirect(t::TinyToken) = reinterpret(Int64,t)>=0
 
 isdirect(t::DirectToken) = true
@@ -454,7 +472,8 @@ isdirect(t::FlyToken) = false
 
 "throw an error if token references some buffer"
 function checkdirect(t::HybridToken)
-    @boundscheck isdirect(t) || throw(ErrorException("required DirectToken, but HybridToken is no DirectToken: &t"))
+    @boundscheck isdirect(t) ||
+        error("required DirectToken, but HybridToken is no DirectToken: $t")
     nothing
 end
 
@@ -464,100 +483,48 @@ throw an error if token offset+size is out of bounds.
 
 limit is the total size if  of the buffer (offset,size) points into
 """
+@propagate_inbounds
 function check_ofs_size(offset:: UInt32, size:: UInt64, limit)
     @boundscheck size+offset <= limit || throw BoundsError(offset+size,limit)
     nothing
 end
 
-
-function Base.checkbounds(t:AbstractToken, i:Integer)
-    @boundscheck if (i<=0) || (i > offset(t)+sizeof(t)))
-        throw BoundsError(t,i)
-    end
+@propagate_inbounds
+check_ofs_size(offset:: UInt32, size:: UInt64, s:AbstractString) =
+    @boundscheck check_ofs_size(offset,size.ncodeunits(s))
     nothing
 end
 
 
 "throw an error if token references some buffer"
+@propagate_inbounds
 function checksize(size::Unsigned, maxsize))
-    @boundscheck size <= maxsize || throw(ErrorException("too many code units: &size"))
+    @boundscheck size <= maxsize ||
+        throw(ErrorException("too many code units: &size"))
 end
 
 
 "throw an error if token references some buffer"
+@propagate_inbounds
 function checkappend(t::TinyToken,append))
     @boundscheck checktiny(t)
-    @boundscheck ((t.bits>>56 & 7) + append <=7) || throw(ErrorException("no &append bytes left in tinytoken: &t"))
-end
-
-
-function subtoken(t::T<:AbstractToken, first::Int, last::Int) = T(t,first,last)
-    #@boundscheck checktiny(t)
-    Int64 ret = t.bits
-
-    TinyToken ret = t
-    n = ncodeunits(t)
-    if (last<n)
-
-    end
-
-end
-
-
-@propagate_inbounds function Base.codeunit(t::TinyToken, i::Integer)
-    @boundscheck 0 < i <= ncodeunits(t) || boundserr(t,i)
-
+    @boundscheck ((t.bits>>56 & 7) + append <=7) ||
+        throw(ErrorException("no &append bytes left in tinytoken: &t"))
 end
 
 
 
 #=
-function TinyToken(s::String, category::UInt8=0)
-    sz = sizeof(s)
-    # try to encode in 7 bytes. tinytoken
-    if sz < sizeof(::TinyToken)
-        str :: Int64 = 0
-        utf8Flag :: UInt8 = 0
-        i = 0
-        while ++i <= sz
-            c = codeunit(s,i)
-            (str *= 8) += c
-            if c>127
-            end
 
-        end
-        p :: Ptr{UInt8} = pointer(s)
-        (str *= 8) += codeunit(s,i)
-
-        str = (T(s |> pointer |> Ptr{TinyToken} |> Base.unsafe_load |> ntoh)
-    end
-    # check for UTF8 encoded ISO-8859-1 string: sizeof(s)>=8 could be valid in this case
-    throw(ErrorException("supplied string size $sz exceeds size limit for TinyToken - use Token, instead"))
-
-    bits_to_wipe = 8(sizeof(T) - sz)
-    content = (T(s |> pointer |> Ptr{TinyToken} |> Base.unsafe_load |> ntoh) >> bits_to_wipe) << bits_to_wipe
-    TinyToken{T}(content | T(sz))
-end
-
-String(s::TinyToken) = String(reinterpret(UInt8, [s.size_content|>ntoh])[1:sizeof(s)])
 
 Base.lastindex(s::TinyToken) = Int(s.size_content & 0xf)
 Base.iterate(s::TinyToken, i::Integer) = iterate(String(s), i)
 Base.iterate(s::TinyToken) = iterate(String(s))
-Base.sizeof(s::TinyToken) = Int(s.size_content & 0xf)
 Base.print(s::TinyToken) = print(String(s))
 Base.display(s::TinyToken) = display(String(s))
 Base.convert(::TinyToken{T}, s::String) where T = TinyToken{T}(s)
 Base.convert(::String, ss::TinyToken) = String(a) #reduce(*, ss)
 Base.firstindex(::TinyToken) = 1
-Base.ncodeunits(s::TinyToken) = ncodeunits(String(s))
-Base.codeunit(s::TinyToken, i) = codeunits(String(s), i)
-Base.isvalid(s::TinyToken, i::Integer) = isvalid(String(s), i)
-
-Base.getindex(s::TinyToken{T}, i::Integer) where T = begin
-    print(i)
-    Char((s.size_content << 8(i-1)) >> 8(sizeof(T)-1))
-end
 Base.collect(s::TinyToken) = getindex.(s, 1:lastindex(s))
 
 ==(s::TinyToken, b::String) = begin
