@@ -7,13 +7,13 @@ const MAX_DIRECT_SIZE = UInt64(7)
 const MAX_TOKEN_SIZE = UInt64((1<<27) - 1)
 
 "bitmask to check if any inline code unit is not ascii"
-const NOTASCII_BITS = UInt64(0x10000000100000001000000010000000100000001000000010000000)
+const NOTASCII_BITS = UInt64(0b10000000100000001000000010000000100000001000000010000000)
 
 "bitmask to restrict to all code units in a DirectToken"
 const CODEUNIT_BITS =(UInt64(1)<<56)-1
 
 "bitmask to isolate size bits in DirectToken"
-const DIRECT_SIZE_BITS = UInt64(MAX_TINY_SIZE)<<56
+const DIRECT_SIZE_BITS = UInt64(MAX_DIRECT_SIZE)<<56
 
 "bitmask to isolate size bits in FlyToken"
 const FLY_SIZE_BITS = UInt64(MAX_TOKEN_SIZE)<<32
@@ -42,7 +42,7 @@ struct Unsafe end
 
 
 "Known standard types usable in reinterpret for 64 bit types"
-const Bits64 = union {UInt64, Int64}
+const Bits64 = Union{UInt64, Int64}
 
 """
 A flyweight data structure for an immutable Token.
@@ -54,7 +54,7 @@ TinyToken implementations may throw an error if a Token API method requires
 a buffer and no buffer is supplied to the method
 
 """
-abstract type TinyToken <: AbstractToken
+abstract type TinyToken <: AbstractToken end
 
 
 
@@ -310,15 +310,18 @@ offset(t::HybridToken) = isdirect(t) ? offset(dt(t)) : offset(ft(t))
 
 "empty token (offset, length are 0)"
 function FlyToken(cat::TCategory)
-    ft(NOTTINY_BIT | UInt64(cat)<<59)
+#    ft(NOTTINY_BIT | UInt64(cat)<<59)
+    ft(NOTTINY_BIT | (cat%UInt64)<<59)
 end
 
 
-"token with given size, bounds-checked, offset 0"
-@propagate_inbounds function FlyToken(cat::TCategory, size::UInt64)
+"""
+token with given size, bounds-checked, offset 0
+"""
+Base.@propagate_inbounds function FlyToken(cat::TCategory, size::UInt64)
     @boundscheck checksize(size,MAX_TOKEN_SIZE)
     if FLY_SPLIT_SIZE
-        ft((size&7)<<56 | (size>>>3)<<32) | (u64(FlyToken(cat)))
+        ft((size&7)<<56 | (size>>>3)<<32 | u64(FlyToken(cat)))
     else
         ft(size<<32 | u64(FlyToken(cat)))
     end
@@ -334,8 +337,8 @@ used with this token. You have to grant (or check) validity of (offset,size)
 with respect to the referenced buffer in your code elsewere.
 
 """
-@propagate_inbounds function FlyToken(cat::TCategory, offset::UInt32, size::UInt64)
-    ft(u64(FlyToken(t),size))|offset)
+Base.@propagate_inbounds function FlyToken(cat::TCategory, offset::UInt32, size::UInt64)
+    ft(u64(FlyToken(t),size)|offset)
 end
 
 
@@ -348,7 +351,7 @@ DirectToken(cat::TCategory) = dt( UInt64(cat)<<59 )
 
 
 "token with given size, bounds-checked, offset 0"
-@propagate_inbounds function DirectToken(cat::TCategory, size::UInt64)
+Base.@propagate_inbounds function DirectToken(cat::TCategory, size::UInt64)
     @boundscheck checksize(size,MAX_DIRECT_SIZE)
     dt(u64(DirectToken(cat)) | size<<56)
 end
@@ -370,8 +373,13 @@ end
 
 "token from a string constant (requires size<8)"
 function DirectToken(cat::TCategory, s::Utf8String)
-    @inbounds DirectToken(cat, 0, ncodeunits(s),s)
-    # TODO test size>7: bounds check still active? (because no propagate inbounds)
+    size = ncodeunits(s)
+    @boundscheck check_size(size,MAX_DIRECT_SIZE)
+    buffer = DirectToken(cat,size%UInt64)
+    for i in 1:size
+        buffer = unsafe_setcodeunit(buffer,i,codeunit(s,i))
+    end
+    buffer
 end
 
 
@@ -483,30 +491,28 @@ throw an error if token offset+size is out of bounds.
 
 limit is the total size if  of the buffer (offset,size) points into
 """
-@propagate_inbounds
-function check_ofs_size(offset:: UInt32, size:: UInt64, limit)
-    @boundscheck size+offset <= limit || throw BoundsError(offset+size,limit)
+Base.@propagate_inbounds function check_ofs_size(offset:: UInt32, size:: UInt64, limit)
+#function check_ofs_size(offset:: UInt32, size:: UInt64, limit)
+    @boundscheck checksize(size+offset,limit)
     nothing
 end
 
-@propagate_inbounds
-check_ofs_size(offset:: UInt32, size:: UInt64, s:AbstractString) =
-    @boundscheck check_ofs_size(offset,size.ncodeunits(s))
+Base.@propagate_inbounds function check_ofs_size(offset:: UInt32, size:: UInt64, s::AbstractString)
+    @boundscheck check_ofs_size(offset,size,ncodeunits(s))
     nothing
 end
 
 
 "throw an error if token references some buffer"
-@propagate_inbounds
-function checksize(size::Unsigned, maxsize))
+Base.@propagate_inbounds function checksize(size::Unsigned, maxsize)
     @boundscheck size <= maxsize ||
-        throw(ErrorException("too many code units: &size"))
+        throw(ErrorException("size beyond limit: $size > $maxsize"))
+    nothing
 end
 
 
 "throw an error if token references some buffer"
-@propagate_inbounds
-function checkappend(t::TinyToken,append))
+Base.@propagate_inbounds function checkappend(t::TinyToken,append)
     @boundscheck checktiny(t)
     @boundscheck ((t.bits>>56 & 7) + append <=7) ||
         throw(ErrorException("no &append bytes left in tinytoken: &t"))
@@ -531,11 +537,3 @@ Base.collect(s::TinyToken) = getindex.(s, 1:lastindex(s))
     String(s)  == b
 end
 =#
-
-
-
-#######################################
-
-Base.cmp(a::AbstractToken, b::AbstractToken) = cmp_codeunits(a,b)
-
-end # module

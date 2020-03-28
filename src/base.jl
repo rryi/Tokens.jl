@@ -66,7 +66,7 @@ end
 
 
 "These string types have methods operating with Utf8 code units"
-const Utf8String = Union(String,SubString{String},AbstractToken)
+const Utf8String = Union{String,SubString{String},AbstractToken}
 
 
 #########################################################
@@ -85,7 +85,7 @@ If code units are stored directly in a TinyToken, offset is 0.
 Buffer is not needed in this function, no consistency or bounds
 checks are performed.
 """
-function offset(t::AbstractToken) -> UInt
+function offset(t::AbstractToken)
     throw(MethodError(offset, (t,)))
 end
 
@@ -108,9 +108,11 @@ Meaning depends on context. [`Lexer`](@ref) uses
 the meaning defined in the following constants beginning with "T_"
 
 """
-function category (t::AbstractToken)
+function category(t::AbstractToken)
     throw(MethodError(offset, (t,)))
 end
+
+
 """
 Token category definitions
 
@@ -126,7 +128,7 @@ certain lexer context.
 
 An identifier in the lexer context.
 Typical rules are: 1st character is a letter, following characters are
-letters or digits. Some special characters like '_' or '$' could also
+letters or digits. Some special characters like '_' could also
 appear in a T_IDENT token.
 
 ## T_SPECIAL = 2
@@ -137,7 +139,7 @@ other lexical construct like quotes, and not recognized as symbol.
 ## T_INT = 3
 
 A sequence of digits, may have leading sign. usually '+' or '-', but a lexer
-can recognize other characters as a sign, like '$'
+can recognize other characters as a sign
 
 
 # group (2): lexer categories determined by 1st code unit
@@ -287,8 +289,9 @@ for cat in instances(TCategory)
                 :(DirectToken($($(cat)),$txt))
             end
         end
+        export $(Symbol(cat))
+        export @$(Symbol(Symbol(cat),"_str"))
     end)
-    export Symbol(cat), @Symbol(Symbol(cat),"_str")
 end
 
 
@@ -316,16 +319,15 @@ from the performance-oriented lowlevel (offset,size) code unit
 segment notation. The need for explicit conversion of offset and
 size hopefully helps to to avoid mix-up.
 
-There is another subtoken method which uses an (first,last)
+There is another subtoken method which uses a first:last
 character index sequence like usual String and SubString
 operations. The (offset,size) oriented operation is faster than
 the form subtoken(t,first,last) , but less safe: you can construct
 tokens which are no valid strings, because there is no check
-whether t[offset+1] is a valid character index or
+whether offset+1 is a valid character index of t or
 codeunit(t,offset+size) is the last code unit of a character.
 """
-subtoken(offset::UInt32, size::UInt64, t::T<:AbstractToken) = T(offset,size,t)
-
+subtoken(offset::UInt32, size::UInt64, t::T) where T<:AbstractToken = T(offset,size,t)
 
 
 """
@@ -336,15 +338,15 @@ a new token of same type with the same category
 and content SubString(string(t),first,last).
 
 """
-subtoken(t::AbstractToken, first::Int, last::Int)
-    first ≤ last || return T(0,0,t)
+function subtoken(t::T, first::Int, last::Int) where T<:AbstractToken
+    first <= last || return T(category(T))
     @boundscheck begin
         checkbounds(t, first:last)
         @inbounds isvalid(t, first) || string_index_err(t, first)
         @inbounds isvalid(t, last) || string_index_err(t, last)
     end
     nextlast = nextind(t,last)
-    subtoken(UInt32(first)-1,UInt64(nextlast-first),t)
+    subtoken(UInt32(first-1),(nextlast-first)%UInt64,t)
 end
 
 
@@ -410,7 +412,7 @@ function cmp_codeunits(a::Utf8String, b::Utf8String)
     0
 end
 
-Base.cmp(a::AbstractToken, b::AbstractToken) = cmp_codeunits(a,b)
+Base.cmp(a::Utf8String, b::Utf8String) = cmp_codeunits(a,b)
 
 #= use default
 function Base.==(a::AbstractToken, b::AbstractToken)

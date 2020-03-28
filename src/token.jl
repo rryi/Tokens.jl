@@ -22,19 +22,66 @@ Immutable token, either direct enoded or buffer based.
 struct Token <: TinyBufferToken
     tiny :: HybridToken # category, size, offset
     buffer :: String # memory with token text data or EMPTYSTRING
-    Token(t::DirectToken) = new(ht(t),EMPTYSTRING)
-    Token(t::BufferToken) = new(ht(t.tiny),t.buffer)
-    @propagate_inbounds function Token(
-        cat::TCategory,offset::UInt32, size::UInt64, s::String, direct::Bool)
-        if direct && (size<=MAX_DIRECT_SIZE)
-            new(ht(DirectToken(cat,offset,size,s)),EMPTYBUFFER)
-        else
-            @boundscheck check_ofs_size(offset,size,ncodeunits(s)
-            new(ht(FlyToken(cat,offset,size)),s)
+    Base.@propagate_inbounds function Token(tiny::HybridToken, buffer::String)
+        @boundscheck isdirect(tiny) || checkbounds(buffer,offset(tiny)+ncodeunits(tiny))
+        new(tiny,buffer)
     end
 end
 
-@propagate_inbounds function Token(cat::TCategory, s::Utf8String, direct::Bool=false)
+
+"""
+Immutable token, always buffer based
+
+Use this type if you expect most token sizes to be above 7
+"""
+struct BufferToken <: TinyBufferToken
+    tiny :: FlyToken # category, size, offset
+    buffer :: String # memory with token text data.
+    BufferToken(t::DirectToken) =
+        new(FlyToken(category(t),ncodeunits(t)),string(t))
+    function BufferToken(t::Token)
+        if isdirect(t)
+            BufferToken(dt(t.tiny))
+        else
+            new(ft(t.tiny),t.buffer)
+        end
+    end
+    function BufferToken(cat::TCategory, s::String)
+        new(FlyToken(cat,ncodeunits(s)%UInt64),s)
+    end
+    Base.@propagate_inbounds function BufferToken(
+        cat::TCategory,offset::UInt32, size::UInt64, s::String)
+        @boundscheck check_ofs_size(offset,size,s)
+        new(FlyToken(cat,offset,size),s)
+    end
+    function BufferToken(cat::TCategory,s::SubString{String})
+        new(FlyToken(cat,UInt32(s.offset),s.ncodeunits%UInt64),s.string)
+    end
+end
+
+BufferToken(cat::TCategory,s::AbstractString) = BufferToken(cat,string(s))
+BufferToken(t::BufferToken) = t
+
+Token(cat::TCategory) = Token(cat,EMPTYSTRING)
+BufferToken(cat::TCategory) = BufferToken(cat,EMPTYSTRING)
+Token(cat::TCategory,s::AbstractString) = Token(cat,string(s))
+Token(t::DirectToken) = @inbounds Token(ht(t),EMPTYSTRING)
+Token(t::BufferToken) = @inbounds Token(ht(t.tiny),t.buffer)
+Token(t::Token) = t
+DirectToken(t::Token) = isdirect(t) ? dt(t.tiny) : DirectToken(category(t),t)
+
+
+Base.@propagate_inbounds function Token(
+    cat::TCategory,offset::UInt32, size::UInt64, s::String, direct::Bool=false)
+    if direct && (size<=MAX_DIRECT_SIZE)
+        new(ht(DirectToken(cat,offset,size,s)),EMPTYSTRING)
+    else
+        @boundscheck check_ofs_size(offset,size,ncodeunits(s))
+        new(ht(FlyToken(cat,offset,size)),s)
+    end
+end
+
+Base.@propagate_inbounds function Token(cat::TCategory, s::Utf8String, direct::Bool=false)
     size = s.ncodeunits
     if direct && (size <= MAX_DIRECT_SIZE)
         Token(ht(DirectToken(cat,s)),EMPTYSTRING)
@@ -45,34 +92,6 @@ end
     end
 end
 
-"""
-Immutable token, always buffer based
-
-Use this type if you expect most token sizes to be above 7
-"""
-struct BufferToken <: TinyBufferToken
-    tiny :: FlyToken # category, size, offset
-    buffer :: String # memory with token text data.
-    BufferToken(t::DirectToken) = new(ft(t),string(t))
-    function BufferToken(t::Token)
-        if isdirect(t)
-            BufferToken(dt(t.tiny))
-        else
-            new(ft(t.tiny),t.buffer)
-        end
-    end
-    function BufferToken(cat:TCategory, s:String)
-        new(FlyToken(cat,ncodeunits(s)%UInt64),s)
-    end
-    @propagate_inbounds function BufferToken(
-        cat::TCategory,offset::UInt32, size::UInt64, s::String)
-        @boundscheck check_ofs_size(offset,size,s)
-        new(FlyToken(cat,offset,size),s)
-    end
-    function BufferToken(cat::TCategory,s::SubString{String})
-        new(FlyToken(cat,UInt32(s.offset),s.ncodeunits%UInt64),s.string)
-    end
-end
 
 
 #= maybe ... currently, not really helpful
@@ -109,7 +128,7 @@ offset(t::TinyBufferToken) = offset(t.tiny)
 
 category(t::TinyBufferToken) = category(t.tiny)
 
-isDirect(t::TinyBufferToken) = isDirect(t.tiny)
+isdirect(t::TinyBufferToken) = isdirect(t.tiny)
 
 
 #########################################################
@@ -125,9 +144,17 @@ Base.cmp(a::DirectToken, b::Token) = isdirect(b.tiny) ? cmp(a,b.tiny) : cmp_code
 
 Base.cmp(a::Token, b::Token) = reinterpret(Int64,u64(a.tiny)|u64(b.tiny))>=0 ? cmp(a.tiny,b.tiny) : cmp_codeunits(a,b)
 
-Base.convert(::Type{BufferToken}, s::SubString{String}) = BufferToken(T_TEXT,s)
+Base.convert(::Type{BufferToken}, s::AbstractString) = BufferToken(T_TEXT,s)
 
-Base.convert(::Type{Token}, s::SubString{String}) = Token(T_TEXT,s)
+Base.convert(::Type{Token}, s::AbstractString) = Token(T_TEXT,s)
+
+Base.convert(::Type{BufferToken}, t::AbstractToken) = BufferToken(t)
+
+Base.convert(::Type{Token}, t::AbstractToken) = Token(t)
+
+Base.convert(::Type{SubString{String}, t::BufferToken) =
+    @inbounds SubString(t.buffer,offset(t),offset(t)+ncodeunits(t))
+
 
 
 function Base.codeunit(t::TinyBufferToken, i::Integer)
@@ -139,33 +166,55 @@ function Base.codeunit(t::TinyBufferToken, i::Integer)
     end
 end
 
-function Base.iterate(s::TinyBufferToken, i::Integer=firstindex(s))
-    i == ncodeunits(s)+1 && return nothing
-    @boundscheck checkbounds(s, i)
-    y = iterate(s.string, s.offset + i)
+function Base.iterate(t::TinyBufferToken, i::Integer=firstindex(s))
+    i == ncodeunits(t)+1 && return nothing
+    @boundscheck checkbounds(t, i)
+    y = iterate(t.buffer, t.offset + i)
     y === nothing && return nothing
     c, i = y
-    return c, i - s.offset
+    return c, i - t.offset
 end
 
-function getindex(s::SubString, i::Integer)
-    @boundscheck checkbounds(s, i)
-    @inbounds return getindex(s.string, s.offset + i)
+function getindex(t::BufferToken, i::Integer)
+    @boundscheck checkbounds(t, i)
+    @inbounds return getindex(t.buffer, offset(t) + i)
+end
+
+function getindex(t::Token, i::Integer)
+    @boundscheck checkbounds(t, i)
+    @inbounds if isdirect(t)
+        getindex(dt(t.tiny),i)
+    else
+        getindex(t.buffer, offset(ft(t.tiny)) + i)
+    end
 end
 
 
-function Base.SubString(t::TinyBufferToken,i::Int, j::Int)
-    if isDirect(t)
+function codeunit(t::Token, i::Integer)
+    @boundscheck checkbounds(t, i)
+    @inbounds if isdirect(t)
+        codeunit(dt(t.tiny),i)
+    else
+        codeunit(t.buffer, offset(ft(t.tiny)) + i)
+    end
+end
+
+
+# optimized methods to avoid iterating over chars
+write(io::IO, t::BufferToken) =
+    GC.@preserve s unsafe_write(io, pointer(t.buffer,t.offset), reinterpret(UInt, sizeof(t)))
+print(io::IO, s::Union{String,SubString{String}}) = (write(io, s); nothing)
+#TODO write, print für alle Tokens bes DirectT und Token
+todo
+
+
+function Base.SubString(t::BufferToken,i::Int, j::Int)
+    if isdirect(t)
     t.tiny<0 ? SubString(t.)
      = SubString()
+    else
 end
 
-#
-function Base.SubString(t::MutableToken,i::Int, j::Int)
-    if
-    t.tiny<0 ? SubString(t.)
-     = SubString()
-end
 
 
 #=
