@@ -241,9 +241,7 @@ code is needed.
 primitive type HybridToken <: TinyToken 64 end
 
 
-####################################################################
-### basic helpers ##################################################
-####################################################################
+## basic helpers ##
 
 
 
@@ -293,7 +291,7 @@ function unsafe_setcodeunit(t::DirectToken, index, codeunit::UInt8)
     dt( u64(t) | ( UInt64(codeunit)<< ((7-index)<<3)))
 end
 
-offset(t::FlyToken) = convert(UInt32,u64(t) & OFFSET_BITS)
+offset(t::FlyToken) = (u64(t) & OFFSET_BITS)%UInt32
 
 offset(t::DirectToken) = UInt32(0)
 
@@ -302,9 +300,7 @@ offset(t::HybridToken) = isdirect(t) ? offset(dt(t)) : offset(ft(t))
 
 
 
-####################################################################
-### constructors  ##################################################
-####################################################################
+## constructors  ##
 
 
 
@@ -388,25 +384,30 @@ function DirectToken(cat::TCategory, c::Char)
 end
 
 
-     ####################################################################
-     ### Base operators and functions overloading #######################
-     ####################################################################
+## Token API methods ##
 
+category(t::TinyToken) = reinterpret(TCategory, UInt8((u64(t) >>>59)&15))
 
+category(t::DirectToken) = reinterpret(TCategory, UInt8(u64(t) >>>59))
 
-Base.sizeof(t::DirectToken) = (u64(t)&DIRECT_SIZEBITS)>>56
+isdirect(t::TinyToken) = reinterpret(Int64,t)>=0
 
+isdirect(t::DirectToken) = true
 
-function Base.sizeof(t::FlyToken)
+isdirect(t::FlyToken) = false
+
+usize(t::DirectToken) = (u64(t)>>56) & MAX_DIRECT_SIZE
+
+function usize(t::FlyToken)
     if FLY_SPLIT_SIZE
-        (u64(t)&DIRECT_SIZE_BITS) >>56 | (u64(t)&SPLIT_SIZE_BITS)>>29
+        usize(dt(t)) | (u64(t)&SPLIT_SIZE_BITS)>>29
     else
-         (u64(t)&FLY_SIZE_BITS)>>32
+        (u64(t)&FLY_SIZE_BITS)>>32
     end
 end
 
 
-function Base.sizeof(t::HybridToken)
+function usize(t::HybridToken)
     if FLY_SPLIT_SIZE
         # tricky code without jumps:
         # 3 lowest bits of the size are always stored at bit position 56..58.
@@ -419,21 +420,87 @@ function Base.sizeof(t::HybridToken)
         ((u64(t)&masksize)>>>29) | ((u64(t) >>>56) & 7)
     else
         if isdirect(t)
-            sizeof(dt(t))
+            usize(dt(t))
         else
-            sizeof(ft(t))
+            usize(ft(t))
         end
     end
 end
 
 
-function Base.codeunit(t::DirectToken, index::Integer)
-    @boundscheck checkbounds(t,index)
-    UInt8(UInt8(255) & (u64(t) >>> ((7-index)<<3)))
+"read the string portion of a DirectToken"
+function _readdirecttoken(io::IO, t::DirectToken) ::DirectToken
+    for i in 1:usize(t)
+        t = unsafe_setcodeunit(t,i,read(io,UInt8))
+    end
+    t
 end
 
 
-function Base.codeunit(t::TinyToken, index::Integer)
+"read category and size in packed format 1 or 4 bytes"
+function _readtokenheader(io::IO)
+    b = read(io,UInt8)
+    cat = reinterpret(TCategory,((b>>3)&15)%UInt8)
+    size = (b & MAX_DIRECT_SIZE) % UInt64
+    if b > 127
+        size |=  (read(io,UInt8)%UInt64) << 3
+        size |=  (read(io,UInt8)%UInt64) << 11
+        size |=  (read(io,UInt8)%UInt64) << 19
+    end
+    (cat,size)
+end
+
+"write category and size in packed format 1 or 4 bytes"
+function _writetokenheader(io::IO,t::HybridToken)
+    size = usize(t)
+    b ::UInt8 = UInt8(category(t))<<3 + (size&MAX_DIRECT_SIZE)%UInt8
+    write(io,b)
+    if size > MAX_DIRECT_SIZE
+        size >>= 3
+        write(io, size % UInt8)
+        size >>= 8
+        write(io, size % UInt8)
+        size >>= 8
+        write(io, size % UInt8)
+        size >>= 8
+        write(io, size % UInt8)
+    end
+    nothing
+end
+
+
+
+
+
+
+## Base operators and functions overloading ##
+
+
+
+# serializing of DirectToken
+function Base.write(io::IO, t::DirectToken)
+    b = (u64(t)>> 56) % UInt8
+    write(io,b)
+    for i in 1:usize(t)
+        write(io, @inbounds codeunit(t,i))
+    end
+end
+
+
+function Base.read(io::IO, ::Type{DirectToken})
+    cat,size = _readtokenheader(io)
+    @boundscheck checksize(size, MAX_DIRECT_SIZE)
+    _readdirecttoken(io,DirectToken(cat,size))
+end
+
+
+function Base.codeunit(t::DirectToken, index::Int)
+    @boundscheck checkbounds(t,index)
+    (255%UInt8) & (u64(t) >>> ((7-index)<<3))%UInt8
+end
+
+
+function Base.codeunit(t::TinyToken, index::Int)
     isdirect(t) || error("code unit buffer not available in codeunit($t,$index)")
     codeunit(dt(t),index)
 end
@@ -456,20 +523,24 @@ function Base.cmp(a::DirectToken, b::DirectToken)
     0
 end
 
-#########################################################
-################ Token API methods ######################
-#########################################################
+
+# GEHT NICHT offset ist sinnlos in serialisierung
+#=
+# serialize tinytoken as UInt64
+function Base.write(io::IO, t::TinyToken)
+    write(io,u64(t))
+end
 
 
-category(t::TinyToken) = reinterpret(TCategory, UInt8((u64(t) >>>59)&15))
+# deserialize tinytoken
+#= explicit...
+Base.read(io::IO, ::FlyToken) = ft(read(io,UInt64))
+Base.read(io::IO, ::DirectToken) = dt(read(io,UInt64))
+Base.read(io::IO, ::HybridToken) = ht(read(io,UInt64))
+=#
+Base.read(io::IO, ::Type{T}) where T<: TinyToken = reinterpret(T,read(io,UInt64))
+=#
 
-category(t::DirectToken) = reinterpret(TCategory, UInt8(u64(t) >>>59))
-
-isdirect(t::TinyToken) = reinterpret(Int64,t)>=0
-
-isdirect(t::DirectToken) = true
-
-isdirect(t::FlyToken) = false
 
 
 #########################################################
@@ -509,15 +580,6 @@ Base.@propagate_inbounds function checksize(size::Unsigned, maxsize)
         throw(ErrorException("size beyond limit: $size > $maxsize"))
     nothing
 end
-
-
-"throw an error if token references some buffer"
-Base.@propagate_inbounds function checkappend(t::TinyToken,append)
-    @boundscheck checktiny(t)
-    @boundscheck ((t.bits>>56 & 7) + append <=7) ||
-        throw(ErrorException("no &append bytes left in tinytoken: &t"))
-end
-
 
 
 #=

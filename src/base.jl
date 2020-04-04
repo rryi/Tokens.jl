@@ -379,22 +379,25 @@ function Base.thisind(t::AbstractToken, i::Int)
 end
 =#
 
-#########################################################
-#### API implementations which need no specialization ###
-#########################################################
 
-Base.codeunit(t::AbstractToken) = UInt8
-
-Base.ncodeunits(t::AbstractToken) = sizeof(t)
+## Token API definition and implementations which need no specialization
 
 
-# simplified implementation, assuming t is valid UTF8.
-# isvalid only checks current byte. It does not check if all code units
-# of the unicode character exist and have valid values.
-Base.isvalid(t::AbstractToken, i::Int) = codeunit(t, i) & 0xc0 != 0x80
+# needs overloading!
+"""
+    function usize(t::AbstractToken) :: UInt64
+
+the size in bytes of the text contents of the token.
+
+returned as an UInt64, which is the data type for token
+sizes used throughout all token implementations.
+
+Functions ncodeunits and sizeof are derived from usize
+"""
+function usize end
 
 
-
+#= not helpful. Juloa Base has optimized c code, use that
 "generic comparison by code units - specialize on TinyToken-s"
 function cmp_codeunits(a::Utf8String, b::Utf8String)
     al, bl = sizeof(a), sizeof(b)
@@ -411,8 +414,24 @@ function cmp_codeunits(a::Utf8String, b::Utf8String)
     al > bl && return 1
     0
 end
+=#
 
-Base.cmp(a::Utf8String, b::Utf8String) = cmp_codeunits(a,b)
+## AbstractString API implementations which need no specialization
+
+Base.codeunit(t::AbstractToken) = UInt8
+
+Base.ncodeunits(t::AbstractToken) = usize(t)%Int
+
+Base.sizeof(t::AbstractToken) = usize(t)%Int
+
+
+# simplified implementation, assuming t is valid UTF8.
+# isvalid only checks current byte. It does not check if all code units
+# of the unicode character exist and have valid values.
+Base.isvalid(t::AbstractToken, i::Int) = codeunit(t, i) & 0xc0 != 0x80
+
+# Not helpful. Julia Base uses optimized c code with pointers.
+# Base.cmp(a::Utf8String, b::Utf8String) = cmp_codeunits(a,b)
 
 #= use default
 function Base.==(a::AbstractToken, b::AbstractToken)
@@ -428,22 +447,33 @@ function Base.show(io::IO,t::AbstractToken)
     Base.print_quoted(io, t)
 end
 
+## enhancements of write and read - with prefix t to avoid type piracy
 
-function Base.write(io::IO, t::AbstractToken)
-    i = 1
-    n = ncodeunits(t)
-    @inbounds while (i<=n)
-        write(io,codeunit(t,i))
-        i += 1
-    end
+"Some more signatures in the style of Base.read with offset and size parameters"
+function tread end
+
+"Some more signatures in the style of Base.write with offset and size parameters"
+function twrite end
+
+"""
+optimized writing of bytes (aka code units) from a string buffer
+"""
+function twrite(io::IO, ofs::UInt32, size::UInt64, s::String)
+    @boundscheck inbounds(s,ofs+size)
+    GC.@preserve s unsafe_write(io, pointer(s)+ofs, size)
 end
 
 
+"""
+optimized reading of bytes (aka code units) into a string buffer
+"""
+function tread(io::IO, size::UInt64, ::Type{String})
+    ss = _string_n(size)
+    GC.@preserve ss unsafe_read(io, pointer(ss), UInt(size))
+end
 
-#########################################################
-####################### helpers #########################
-#########################################################
 
+## helpers ##
 
 # TODO delete
 "helper function: bounds check failure"

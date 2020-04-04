@@ -94,35 +94,8 @@ end
 
 
 
-#= maybe ... currently, not really helpful
-@bitflag BufferFlags ::UInt32 begin
-    TRYDIRECT # return kokens of size<8 as DirectToken
 
-    NONE = 0
-end
-=#
-
-
-
-# Base._string_n
-# allocates and returns a String witn n code units
-
-#= alloc und Schreiben in String
-ss = _string_n(n)
-p = pointer(ss)
-for k = 1:n
-    unsafe_store!(p, codeunit(s, i + k - 1), k)
-endmethods(length)
-
-# out == IObuffer transferiert String ptr
-String(take!(out))
-
-=#
-
-
-#########################################################
-################ Token API methods ######################
-#########################################################
+## Token API methods ##
 
 offset(t::TinyBufferToken) = offset(t.tiny)
 
@@ -131,12 +104,10 @@ category(t::TinyBufferToken) = category(t.tiny)
 isdirect(t::TinyBufferToken) = isdirect(t.tiny)
 
 
-#########################################################
-############## Base methods for tokens ##################
-#########################################################
+usize(t::TinyBufferToken) = usize(t.tiny)
 
-Base.sizeof(t::TinyBufferToken) = sizeof(t.tiny)
 
+## Base methods for tokens ##
 
 Base.cmp(a::Token, b::DirectToken) = isdirect(a.tiny) ? cmp(a.tiny,b) : cmp_codeunits(a,b)
 
@@ -152,20 +123,25 @@ Base.convert(::Type{BufferToken}, t::AbstractToken) = BufferToken(t)
 
 Base.convert(::Type{Token}, t::AbstractToken) = Token(t)
 
-Base.convert(::Type{SubString{String}, t::BufferToken) =
-    @inbounds SubString(t.buffer,offset(t),offset(t)+ncodeunits(t))
+# any use case?? better work with tokens directly, do not convert to (Sub)String
+Base.convert(::Type{SubString{String}}, t::BufferToken) =
+    @inbounds SubString(t.buffer,offset(t)+1,thisind(offset(t)+ncodeunits(t)))
 
 
-
-function Base.codeunit(t::TinyBufferToken, i::Integer)
-    if isdirect(t.tiny)
+function Base.codeunit(t::TinyBufferToken, i::Int)
+    if isdirect(t.tiny) # optimized away for BufferToken because isdirect is constantly false
         codeunit(dt(t.tiny),i)
     else
         @boundscheck checkbounds(t, i)
-        @inbounds return codeunit(s.string, s.offset + i)
+        @inbounds return codeunit(t.buffer, offset(ft(t.tiny)) + i)
     end
 end
 
+
+
+# any advantage over default impl?? TODO -> look at generated default code
+# try & test with default impl!
+#=
 function Base.iterate(t::TinyBufferToken, i::Integer=firstindex(s))
     i == ncodeunits(t)+1 && return nothing
     @boundscheck checkbounds(t, i)
@@ -175,12 +151,12 @@ function Base.iterate(t::TinyBufferToken, i::Integer=firstindex(s))
     return c, i - t.offset
 end
 
-function getindex(t::BufferToken, i::Integer)
+function Base.getindex(t::BufferToken, i::Integer)
     @boundscheck checkbounds(t, i)
     @inbounds return getindex(t.buffer, offset(t) + i)
 end
 
-function getindex(t::Token, i::Integer)
+function Base.getindex(t::Token, i::Integer)
     @boundscheck checkbounds(t, i)
     @inbounds if isdirect(t)
         getindex(dt(t.tiny),i)
@@ -188,62 +164,42 @@ function getindex(t::Token, i::Integer)
         getindex(t.buffer, offset(ft(t.tiny)) + i)
     end
 end
+=#
 
 
-function codeunit(t::Token, i::Integer)
-    @boundscheck checkbounds(t, i)
-    @inbounds if isdirect(t)
-        codeunit(dt(t.tiny),i)
+function Base.read(io::IO, ::Type{Token})
+    cat,size = _readtokenheader(io)
+    if size <= MAX_DIRECT_SIZE
+        t = ht(_readdirecttoken(io,DirectToken(cat,size)))
+        @inbounds Token(t,EMPTYSTRING)
     else
-        codeunit(t.buffer, offset(ft(t.tiny)) + i)
+        @inbounds Token(ht(FlyToken(cat,size)), read(io,size,String))
     end
 end
 
 
-# optimized methods to avoid iterating over chars
-write(io::IO, t::BufferToken) =
-    GC.@preserve s unsafe_write(io, pointer(t.buffer,t.offset), reinterpret(UInt, sizeof(t)))
-print(io::IO, s::Union{String,SubString{String}}) = (write(io, s); nothing)
-#TODO write, print für alle Tokens bes DirectT und Token
-todo
+function Base.read(io::IO, ::Type{BufferToken})
+    cat,size = _readtokenheader(io)
+    @inbounds BufferToken( FlyToken(cat,size), read(io,size,String))
+end
 
 
-function Base.SubString(t::BufferToken,i::Int, j::Int)
-    if isdirect(t)
-    t.tiny<0 ? SubString(t.)
-     = SubString()
+
+# serialize Token and BufferToken
+function Base.write(io::IO, t::TinyBufferToken)
+    tt = t.tiny
+    if isdirect(tt) # optimized away for BufferToken (always false)
+        write(io,dt(tt))
     else
+        f = ft(tt)
+        _writetokenheader(io,f)
+        write(io,offset(f),usize(f),t.buffer)
+    end
 end
 
 
 
 #=
-function TinyToken(s::String, category::UInt8=0)
-    sz = sizeof(s)
-    # try to encode in 7 bytes. tinytoken
-    if sz < sizeof(::TinyToken)
-        str :: Int64 = 0
-        utf8Flag :: UInt8 = 0
-        i = 0
-        while ++i <= sz
-            c = codeunit(s,i)
-            (str *= 8) += c
-            if c>127
-            end
-
-        end
-        p :: Ptr{UInt8} = pointer(s)
-        (str *= 8) += codeunit(s,i)
-
-        str = (T(s |> pointer |> Ptr{TinyToken} |> Base.unsafe_load |> ntoh)
-    end
-    # check for UTF8 encoded ISO-8859-1 string: sizeof(s)>=8 could be valid in this case
-    throw(ErrorException("supplied string size $sz exceeds size limit for TinyToken - use Token, instead"))
-
-    bits_to_wipe = 8(sizeof(T) - sz)
-    content = (T(s |> pointer |> Ptr{TinyToken} |> Base.unsafe_load |> ntoh) >> bits_to_wipe) << bits_to_wipe
-    TinyToken{T}(content | T(sz))
-end
 
 String(s::TinyToken) = String(reinterpret(UInt8, [s.size_content|>ntoh])[1:sizeof(s)])
 
@@ -270,5 +226,3 @@ Base.collect(s::TinyToken) = getindex.(s, 1:lastindex(s))
     String(s)  == b
 end
 =#
-
-end # module
