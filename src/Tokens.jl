@@ -1,5 +1,6 @@
 module Tokens
 
+using MurmurHash3
 #using BitFlags
 
 include("base.jl")

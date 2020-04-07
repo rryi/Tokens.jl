@@ -106,7 +106,7 @@ content is removed from this.
 no buffer reorganization, but flushing can increase
 re-use of an unshared buffer
 """
-function Base.flush(io::IOshared{T} where T<:IO )
+function Base.flush(io::IOShared{T} where T<:IO )
     if io.flushable && io.readofs < io.writeofs
         write(io.io,io.readofs,usize(io), io.buffer)
         io.readofs = io.writeofs
@@ -126,7 +126,7 @@ io is changed, adjusted ofs is returned
 ofs precondition: io.readOfs <= ofs <= io.writeOfs
 
 """
-function realloc!(io::IOshared, ofs::UInt32, insert::Int) ::UInt32
+function realloc!(io::IOShared, ofs::UInt32, insert::Int) ::UInt32
     @boundscheck io.readofs <= ofs && ofs <= io.writeofs || boundserror(io,ofs)
     flush(io)
 
@@ -156,7 +156,7 @@ Instance variables are adjusted, the adjusted value of ofs is returned by modify
 
 Return adjusted ofs
 """
-function modify!(io::IOShared, ofs:UInt32, resize:Int)
+function modify!(io::IOShared, ofs::UInt32, resize::Int)
     @boundscheck checkbounds(io,ofs)
     if resize<0
         # correct resize if it would delete beyond end of content
@@ -263,12 +263,12 @@ function Base.read(io::IO, ::Type{BufferToken})
 end
 
 "optimized: no string allocation"
-function Base.read(io::IOshared, ::Type{Token})
+function Base.read(io::IOShared, ::Type{Token})
     tt = read(io,HybridToken)
     if isdirect(tt)
         ss = EMPTYSTRING
     else
-        # reference and skip string data in IOshared instance
+        # reference and skip string data in IOShared instance
         ofs = io.readofs
         size = usize(tt)
         tt = ht((u64(tt)& ~OFFSET_BITS) | ofs)
@@ -279,7 +279,7 @@ function Base.read(io::IOshared, ::Type{Token})
     @inbounds Token(tt,ss)
 end
 
-function Base.read(io::IOshared, ::Type{BufferToken})
+function Base.read(io::IOShared, ::Type{BufferToken})
     t = read(io,Token)
     tt = t.tiny
     if isdirect(tt)
@@ -654,7 +654,7 @@ end
 _crc32c(io::IOBuffer, crc::UInt32=0x00000000) = _crc32c(io, bytesavailable(io), crc)
 
 
-function Base.checkbounds(io:IOshared, i:Integer)
+function Base.checkbounds(io:IOShared, i:Integer)
     if (i<=0) || (i > io.writeofs)
         throw BoundsError(io,i)
     end

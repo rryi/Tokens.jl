@@ -4,7 +4,7 @@ authors = ["Robert Rudolph"]
 version = "0.1.0"
 
 [deps]
-
+MurmurHash3 = "b10b62ed-fbae-5ea5-b934-abaf0477b71d"
 
 [compat]
 julia = "1"

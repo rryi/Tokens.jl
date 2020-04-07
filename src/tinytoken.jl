@@ -59,20 +59,31 @@ abstract type TinyToken <: AbstractToken end
 
 
 """
-Flyweight token with direct encoding of its code units.
+Flyweight token with direct ("inline") encoding of its code units.
 
 This string data type directly stores very short strings with a length
 of up to 7 code units in its value. It supports the AbstractString API and can be
 used as a memory efficient substitute for String instances, avoiding
 any pointer overhead.
 
+# performance considerations
+
+DirectToken instances consume much less memory, compared to String
+instances. They are true values (no heap allocation), which can improve
+data locality and thus CPU cache use. Comparison is considerably faster than
+String comparison.
+
+Depending on the API used, there is a disadvantage because it is not possible
+to obtain a C-stype pointer to the contents of a DirectToken - without
+creating a temporary String copy. E. G. hashing suffers from that.
+
 # implementation details
 
-Design goal is to treat a TinyToken instance as a 64 bit primitive value.
+Design goal is to treat a DirectToken instance as a 64 bit primitive value.
 To allow bit operations, memory layout is in host endianness like Int64.
 Take that into account on binary serialization.
 The sign bit (most significant bit) is used to distinguish a DirectToken
-value from other TinyToken types. For a TinyToken, it must always be 0.
+value from other TinyToken types. For a DirectToken, it must always be 0.
 
 DirectToken encodes really tiny strings of up to 7 code units, directly
 in its 64 bit value. If size is less than 7, unused code units must be 0.
@@ -102,26 +113,21 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
 primitive type DirectToken <: TinyToken 64 end
 
 
-
-
 """
 Flyweight token accomplished by a code unit buffer.
 
 This token type is a flyweight data structure which needs an accompanying
-code unit buffer. In methods, it is either supplied as an additional parameter,
-or it is known from the context.
+code unit buffer. Any method which operates on the contents, needs access to
+the associated buffer. Usually, the buffer is supplied as an additional
+parameter.
 
-See [`Token`](@ref) and [`MutableToken`](@ref) for an implementation
-with explicitly associated buffer.
+FlyToken is considered a module-private type and thus not exported by Tokens
+module. It does NOT implement the full AbstractString API! Only
+AbstractBuffer and AbstractToken methods which do not need contents access
+are implemented.
 
-# methods without code unit buffer parameter
+See [`BufferToken`](@ref) for an implementation with explicitly associated buffer.
 
-There are two reasons why a code unit buffer parameter is not present:
-
-(a) method does not access code units, like *ncodeunits*, *category*
-or *isdirect*.
-
-(b) method needs code unit access, and knows the buffer from its context.
 
 
 Memory layout:
@@ -163,73 +169,39 @@ primitive type FlyToken <: TinyToken 64 end
 
 
 """
-Flyweight token union type.
+Flyweight/direct token union type.
 
 This token type is an alternative implementation for the julia
-construct *union {DirectToken, BufferToken}*.
+construct *union {DirectToken, FlyToken}*.
 
 The sign bit in the 64-bit value (interpreted as UInt64) distinguishes
 between the two types that make up the union, instead of a separate
 tag byte which would be used by a Julia union construct.
 
-The type acts as a DirectToken or a BufferToken depending on its value,
+The type acts as a DirectToken or a FlyToken depending on its value,
 which is tested at runtime, introducing the overhead of one test and
-conditional jump on access. Because caller do not know in advance
-(at compiletime) if an instance is of type BufferToken, the buffer needed
-by a BufferToken has to be supplied in the processing context and is
-unused if the concrete instance is a DirectToken.
+conditional jump on access.
 
-The advantage over FlyToken is less memory consumption, and faster
-access to code units because no indirection takes place, if the actual
-instance is a DirectToken.
+HybridToken is considered a private type of module Tokens and thus not exported.
+It does NOT implement the full AbstractString API! Only AbstractBuffer and
+AbstractToken methods which do not need contents access are implemented.
 
-Use HypridToken instead of BufferToken in cases where strings with up to
+
+Use HybridToken instead of FlyToken in cases where strings with up to
 7 code units have a significant proportion. Benchmark both alternatives
 if runtime performance is critical - it depends on your operation mix
 whether HybridToken gives faster code or not.
 
-[`Token`](@ref) and [`TokenVector`](@ref) are specialized on HybridToken,
-variants see its definition for variants with BufferToken.
-
-# methods without code unit buffer parameter
-
-For many functions using a HybridToken, there is a method with a HybridToken
-parameter but no code unit buffer parameter.
-There are several reasons why a code unit buffer parameter is not present:
-
-(a) function does not access code units, like *ncodeunits*, *category*
-or *isdirect*.
-
-(b) function needs code unit access, but knows where its buffer is, from
-some context information
-
-(c) function needs code unit access and fails if the HybridToken is not a
-DirectToken
-
-# warning on @inbounds usage
-
-Methods that have a HybridToken parameter, need access to its code units,
-but have no associated code unit buffer as a parameter, will check if
-code units are stored directly in the supplied token. If not, they will
-throw a BoundsError.
-
-Those type checks are annoted with *@boundscheck*. This allows for efficient
-operation when it is known in advance that the whole operation can be carried
-out on HybridToken-s without external code unit buffer, by annotating the calls
-with *@inbounds*.
-
-Code annotated with @inbounds assures not only that all used indices are in
-bounds. It additionally assures that all code units are directly stored
-in the HybridToken instance for all method calls with a HybridToken parameter
-which is not accompanied by a code unit buffer parameter.
+[`Token`](@ref) and [`TokenVector`](@ref) are using HybridToken.
 
 # implementation details
 
 Because all values of DirectToken and BufferToken, seen as native 64-bit-chunk,
 are not overlapping, the concrete type of a HybridToken is easily determined
 at runtime (test the sign bit in Int64 interpretation).
+Use [`isdirect`](@ref)f or this purpose.
 
-ncodeunits can be implemented without conditional jumps, by tricky bit
+usize can be implemented without conditional jumps, by tricky bit
 operations. This is left to llvm optimization - benchmarks have shown that
 llvm is capable of doing it and decides on code generation which implementation
 is regarded faster.
@@ -521,6 +493,25 @@ function Base.cmp(a::DirectToken, b::DirectToken)
     (u64(a)&CODEUNIT_BITS) < (u64(b)&CODEUNIT_BITS) && return -1
     (u64(a)&CODEUNIT_BITS) > (u64(b)&CODEUNIT_BITS) && return 1
     0
+end
+
+function Base.hash(s::DirectToken, h::UInt)
+    h += Base.memhash_seed
+    # note: use pointer(s) here (see #6058).
+    mmhash(s, h % UInt32) + h
+end
+
+# MurmurHash3 up to 8 bytes
+#
+function mmhash(str::DirectToken, seed::UInt32)
+    h1 = h2 = seed%UInt64
+    len = usize(str)
+    k1 = 0%UInt64
+    if len != 0
+        k1 = Base.bswap(u64(str)<<8)
+    end
+    h1 = mhtail1(h1, k1)
+    mhfin(len, h1, h2)
 end
 
 

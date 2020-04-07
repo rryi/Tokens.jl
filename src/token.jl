@@ -138,6 +138,16 @@ function Base.codeunit(t::TinyBufferToken, i::Int)
 end
 
 
+function Base.hash(t::BufferToken, h::UInt)
+    h += base.memhash_seed
+    # note: use pointer(s) here (see #6058).
+    s = t.buffer
+    GC.@preserve s ccall(memhash, UInt, (Ptr{UInt8}, Csize_t, UInt32), pointer(s)+offset(t.tiny), sizeof(t.tiny), h % UInt32) + h
+end
+
+
+Base.hash(t::Token, h::UInt) = hash(BufferToken(t),h)
+
 
 # any advantage over default impl?? TODO -> look at generated default code
 # try & test with default impl!
