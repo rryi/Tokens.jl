@@ -146,7 +146,10 @@ function Base.hash(t::BufferToken, h::UInt)
 end
 
 
-Base.hash(t::Token, h::UInt) = hash(BufferToken(t),h)
+function Base.hash(t::Token, h::UInt)
+    isdirect(t) && return hash(dt(t.tiny),h)
+    hash(BufferToken(t),h)
+end
 
 
 # any advantage over default impl?? TODO -> look at generated default code
@@ -178,32 +181,31 @@ end
 
 
 function Base.read(io::IO, ::Type{Token})
-    cat,size = _readtokenheader(io)
+    t = read(io,HybridToken)
+    size = usize(t)
     if size <= MAX_DIRECT_SIZE
-        t = ht(_readdirecttoken(io,DirectToken(cat,size)))
+        t = ht(read(io,dt(t)))
         @inbounds Token(t,EMPTYSTRING)
     else
-        @inbounds Token(ht(FlyToken(cat,size)), read(io,size,String))
+        @inbounds Token(t, read(io,size,String))
     end
 end
 
 
 function Base.read(io::IO, ::Type{BufferToken})
-    cat,size = _readtokenheader(io)
-    @inbounds BufferToken( FlyToken(cat,size), read(io,size,String))
+    t = read(io,HybridToken)
+    @inbounds BufferToken(ft(t), read(io,size,String))
 end
-
 
 
 # serialize Token and BufferToken
 function Base.write(io::IO, t::TinyBufferToken)
     tt = t.tiny
-    if isdirect(tt) # optimized away for BufferToken (always false)
+    if isdirect(tt) # optimized away for FlyToken
         write(io,dt(tt))
     else
-        f = ft(tt)
-        _writetokenheader(io,f)
-        write(io,offset(f),usize(f),t.buffer)
+        write(io,ht(tt))
+        write(io,offset(ft(tt)),usize(ft(tt)),t.buffer)
     end
 end
 

@@ -107,7 +107,7 @@ no buffer reorganization, but flushing can increase
 re-use of an unshared buffer
 """
 function Base.flush(io::IOShared{T} where T<:IO )
-    if io.flushable && io.readofs < io.writeofs
+    if io.flushable && usize(io) > 0
         write(io.io,io.readofs,usize(io), io.buffer)
         io.readofs = io.writeofs
     end
@@ -181,7 +181,7 @@ function modify!(io::IOShared, ofs::UInt32, resize::Int)
 end
 
 
-function ensure_writeable(io::IOShared, count:UInt64)
+function ensure_writeable(io::IOShared, count::UInt64)
 end
 
 

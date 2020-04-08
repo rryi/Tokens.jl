@@ -36,10 +36,6 @@ const NOTTINY_BIT = (UInt64(1)<<63)
 "true: size bitfield is split in [`FlyToken`](@ref)"
 const FLY_SPLIT_SIZE = false
 
-"marker type to tag constructors as unsafe"
-struct Unsafe end
-
-
 
 "Known standard types usable in reinterpret for 64 bit types"
 const Bits64 = Union{UInt64, Int64}
@@ -400,8 +396,15 @@ function usize(t::HybridToken)
 end
 
 
+"""
+    read(io:, t::DirectToken)::DirectToken
+
+read the string portion of a DirectToken
+into a DirectToken which already has category and size.
+"""
+
 "read the string portion of a DirectToken"
-function _readdirecttoken(io::IO, t::DirectToken) ::DirectToken
+function read(io::IO, t::DirectToken) ::DirectToken
     for i in 1:usize(t)
         t = unsafe_setcodeunit(t,i,read(io,UInt8))
     end
@@ -409,38 +412,69 @@ function _readdirecttoken(io::IO, t::DirectToken) ::DirectToken
 end
 
 
-"read category and size in packed format 1 or 4 bytes"
-function _readtokenheader(io::IO)
-    b = read(io,UInt8)
-    cat = reinterpret(TCategory,((b>>3)&15)%UInt8)
-    size = (b & MAX_DIRECT_SIZE) % UInt64
-    if b > 127
-        size |=  (read(io,UInt8)%UInt64) << 3
-        size |=  (read(io,UInt8)%UInt64) << 11
-        size |=  (read(io,UInt8)%UInt64) << 19
+"""
+    read(io::IO)::HybridToken
+
+read category and size in HybridToken bit layout.
+Uses variable length encoding optimized for small sizes (<=7, <=2047)
+returned HybridToken is a DirectToken if size<=7, else a FlyToken.
+
+This is an internal, private helper method.
+It does NOT read any offset or content data!
+"""
+function read(io::IO,::Type{HybridToken})
+    b = read(io,Int8)
+    if b >= 0 # implies size <= 7
+        return ht((b%UInt64)<<56)
     end
-    (cat,size)
+    size = (b & MAX_DIRECT_SIZE) % UInt64
+    size |=  (read(io,UInt8)%UInt32) << 3
+    if size <= MAX_DIRECT_SIZE
+        # read 3 more bytes
+        size |=  (read(io,UInt8)%UInt32) << 3
+        size |=  (read(io,UInt8)%UInt32) << 11
+        size |=  (read(io,UInt8)%UInt32) << 19
+    end
+    return ht(FlyToken(TCategory((b>>3)%UInt8 &0x0f),size))
 end
 
-"write category and size in packed format 1 or 4 bytes"
-function _writetokenheader(io::IO,t::HybridToken)
-    size = usize(t)
-    b ::UInt8 = UInt8(category(t))<<3 + (size&MAX_DIRECT_SIZE)%UInt8
-    write(io,b)
-    if size > MAX_DIRECT_SIZE
-        size >>= 3
-        write(io, size % UInt8)
-        size >>= 8
-        write(io, size % UInt8)
-        size >>= 8
-        write(io, size % UInt8)
-        size >>= 8
-        write(io, size % UInt8)
+
+"""
+    write(io::IO, t::HybridToken)
+
+write category and size from HybridToken.
+variable length writing optimized for small sizes (<=7, <=2047)
+Expects a "real" HybridToken, i.e. it is allowed to have a
+FlyToken with size <=7.
+
+This is an internal, private helper method.
+It does NOT write any offset or content data!
+"""
+function write(io::IO, t::HybridToken)
+    if isdirect(t)
+        write(io,(uint(t)>>56)%UInt8)
+        return nothing
     end
+    size = usize(t)
+    b = (t>>56)%UInt8  | (size&MAX_DIRECT_SIZE)%UInt8
+    if size<=MAX_DIRECT_SIZE
+        # token is not direct, but has compact format
+        write(io,b&0x7f)
+        return nothing
+    end
+    write(io,b) # large size bit is set becaise t not direct
+    if size<2048
+        # 2-byte-format
+        write(io,(size>>3)%UInt8)
+        return nothing
+    end
+    # 4-byte-format
+    write(io,0x)
+    write(io,(size>>3)%UInt8)
+    write(io,(size>>11)%UInt8)
+    write(io,(size>>19)%UInt8)
     nothing
 end
-
-
 
 
 
@@ -460,9 +494,9 @@ end
 
 
 function Base.read(io::IO, ::Type{DirectToken})
-    cat,size = _readtokenheader(io)
-    @boundscheck checksize(size, MAX_DIRECT_SIZE)
-    _readdirecttoken(io,DirectToken(cat,size))
+    t = dt(read(io,HybridToken))
+    @boundscheck isdirect(t) || boundserror("size too long for DirectToken")
+    read(io,t)
 end
 
 
