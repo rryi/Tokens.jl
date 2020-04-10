@@ -11,36 +11,66 @@ In addition to the AbstractString API, an AbstractToken has a
 category which roughly classifies its content.
 It is accessed by [`category`](@ref)(t::AbstractToken).
 Token categories are technically restricted to 16 different values.
-They are defined as enum type [`TCategory`](@ref), which fits for many
-scenarios.
+They are defined as enum type [`TCategory`](@ref), designed to be used in
+lexers and parsers.
+
+For comparisons and hashing, tokens are treated as strings. Two tokens with
+identical content but different category are treated equal and have the
+same hash value.
 
 # interface requirements
+
+Tokens support the AbstractString API. Many methods are defined
+with specialized, efficient code. Developing a new AbstractToken subtype
+requires overloading of many of them.
 
 Every implementation must use Utf8 encoding: token methods operate
 mostly on Utf8 code units and rely on its properties.
 
-In addition to string concatenation, concatenation with a code unit
-(of type UInt8) must be implemented.
+There is a Ttoken specific interface besides AbstractString API, in the
+source code it is characterized by chapter comments
 
 # implementations in this module
 
 This module supplies a very memory efficient implementation
 for very short tokens with [`DirectToken`](@ref), a
-flyweight string plus category in 8 bytes. It can act as a
+short string plus category in 8 bytes. It can act as a
 substitute for short String instances, avoiding any allocation and
 indirect (pointer) access. Data locality is improved, gaining further speed
 advantages by better CPU cache use.
 
-[`BufferToken`](@ref) stores larger strings, up to 2^27-1 code units, but needs
-an additional code unit buffer. Tokens can share the same buffer, reducing
-overhead for heap hamagement and even re-use content.
-The token string size limit is far beyond the needs for text tokenizing and
-should cover most general string processing needs. Files up to 130 MByte can
-be stored in a BufferToken - much more than common recommendations for
-processing chunks which suggest some KByte to some MByte.
+[`BufferToken`](@ref) stores larger strings, but needs an additional code
+unit buffer. Tokens can share the same buffer, reducing overhead for heap
+management and even re-use content, like SubString does.
 
-[`HybridToken`](@ref) is the combination of DirectToken and BufferToken in
+There is a technical size limit for tokens of 2^27-1 code units.
+It applies to *all* AbstractToken implementations. It might restrict usage in
+some general text processing tasks, eg processing huge log files.
+Recommended countermeasure is processing chunks of some KByte to MByte,
+using [`IOShared`](@ref). Tokenizing a text, usually leads to small fragments
+of a couple of bytes. For tokens in the sense of "atoms of text", a size in
+the range of a couple of bytes is expected. Text written by humans, like
+source code and bublished books, has sizes up to some MByte.
+
+[`Token`](@ref) is the combination of DirectToken and BufferToken in
 one type.
+
+# further types and APIs in this package
+
+[`IOShared`](@ref) is simular to IOBuffer but desighned to interact smoothly
+with tokens. Though mutable, its buffer can safely be shared with tokens
+(as well as SubString instances).
+
+[`TokenVector`](@ref) acts as vector of tokens. It uses one shared buffer for
+all vector elements. It uses significantly less memory than a Vector{String},
+but might require copying token contents into the buffer used by the TokenVector
+when a token is put into the vector.
+on putting
+Storing a (buffer based) token in a TokenVector requires copying token contents
+into the buffer used by the TokenVector - except it is already used by the Token.
+In many applications, all token operations can work on one large buffer,
+eliminating contents copies when storing tokens into a TokenVector.can be expensiveIn many parsing scenarios, it is possible to most tokens stem from the same source. By having a
+IOShared instance can In scenarios where all tokens come from a shared IOShared,  and
 
 TinyToken is the abstract super type of the types presented above, subtypes
 are 64bit flyweight token values. They are used directly in situations where

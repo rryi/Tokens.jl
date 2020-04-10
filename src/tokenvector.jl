@@ -20,10 +20,12 @@ against [`BufferTokenVector`](@ref). Though TokenVector induces additional
 conditional code to test if a token is of type DirectToken, it can be faster,
 due to better memory locality and cache efficiency.
 """
-struct TokenVector <: AbstractVector{Token}
+struct GenericTokenVector{T<:TinyToken} <: AbstractVector{Token}
     vec :: Vector{HybridToken}
     data :: IOShared
 end
+
+const TokenVector = GenericTokenVector{Token}
 
 """
 token vector for larger tokens.

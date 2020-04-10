@@ -13,6 +13,35 @@ field.
 abstract type TinyBufferToken <: AbstractToken
 end
 
+"""
+Central token type:
+"""
+struct GenericToken{T <: TinyToken} <: AbstractToken
+    tiny :: T # category, size, offset, possibly content
+    buffer :: String # memory with token text data or EMPTYSTRING
+    function GenericToken{T}(tiny::T, buffer::String)
+        @boundscheck isdirect(tiny) || checkbounds(buffer,offset(tiny)+usize(tiny))
+        new(tiny,buffer)
+    end
+end
+
+
+"""
+Recommended general-purpose Token implementation.
+
+Immutable token, contents either directly stored or buffer based.
+"""
+const Token = GenericToken{HybridToken}
+
+
+"""
+Immutable token, always buffer based
+
+Use this type if you expect most token sizes to be above 7
+"""
+const BufferToken = GenericToken{FlyToken}
+
+
 
 """
 Recommended general-purpose Token implementation.
