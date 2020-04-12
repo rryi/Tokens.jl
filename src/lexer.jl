@@ -15,7 +15,7 @@ An Iterator for tokens.
   * state in iterate is a simple *Int*: the index of the 1st code unit
     of the next token in *source*
 
-  * returned element in iterate is of type *TinyToken*, its buffer
+  * returned element in iterate is of type *FlyToken*, its buffer
     is *source*
 
 #Optional interface elements
@@ -29,7 +29,7 @@ An Iterator for tokens.
     but might be needed by the calling code, it should be stored in some
     temporary state.
 
-  * iterate may or may not encode code units directly in returned TinyToken,
+  * iterate may or may not encode code units directly in returned FlyToken,
     depending on efficiency considerations: if token's code units are
     frequently accessed afterwards, or if tokens are stored for a longer time
     independently from *source*, direct encoding is recommended.
@@ -40,9 +40,9 @@ An Iterator for tokens.
 
   * iterate may optionally replace a recognized keyword or symbol by a
     normalized code unit representation which is directly encoded in the
-    returned TinyToken. This should be clearly documented in the
+    returned FlyToken. This should be clearly documented in the
     iterate method. Example: "<=" and "≤" could be matched onto a single
-    representation, allowing to compare against other TinyToken-s with
+    representation, allowing to compare against other FlyToken-s with
     fast 64-bit compare primitives (instead of string comparing loops).
     Keywords longer than 7 code units could be replaced by an
     abbreviation (which must be chosen to be unique within the token category).
@@ -57,7 +57,7 @@ abstract type AbstractLexer
 end
 
 "Lexer elements are tokens"
-Base.eltype(::Type{AbstractLexer}) = TinyToken
+Base.eltype(::Type{AbstractLexer}) = FlyToken
 
 
 @enum codeCategory :: UInt16 begin

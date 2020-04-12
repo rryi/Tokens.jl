@@ -46,10 +46,10 @@ end
 tryy(100,7)
 
 
-struct TinyToken
+struct FlyToken
     bits::UInt64
-    #TinyToken(i::Any) = TinyToken(0,string(i))
-    function TinyToken(cat::Int,s::AbstractString)
+    #FlyToken(i::Any) = FlyToken(0,string(i))
+    function FlyToken(cat::Int,s::AbstractString)
         println("calling SE inner")
         new(cat<<56)
     end
@@ -57,13 +57,13 @@ end
 
 
 
-tryit = TinyToken(1,"")
+tryit = FlyToken(1,"")
 dump(tryit)
 
-try2 = TinyToken(2)
+try2 = FlyToken(2)
 dump(try2)
 
-try2 = TinyToken(3)
+try2 = FlyToken(3)
 
 
 

@@ -4,15 +4,15 @@ using MurmurHash3
 #using BitFlags
 
 include("base.jl")
-export AbstractToken, offset, isdirect, category, TCategory
+export AbstractToken, offset, isdirect, category, TCategory, usize
 # all TCategory values and its string macros are exported by base.jl
 export subtoken, EMPTYSTRING, tread, twrite
 
-include("tinytoken.jl")
-export TinyToken, FlyToken, DirectToken, HybridToken
+include("flytoken.jl")
+export DirectFly,
 
 include("token.jl")
-export Token, BufferToken
+export Token, BToken
 include("ioshared.jl")
 export IOShared
 #using TreeOnVectors

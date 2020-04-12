@@ -47,9 +47,9 @@ IOShared(s::SubString{String}) = IOShared{Nothing}(UInt32(s.offset),s.ncodeunits
 
 IOShared(s::String) = IOShared{Nothing}(zero(UInt32),(ncodeunits(s)%UInt64),s)
 
-IOShared(t::BufferToken) = IOShared{Nothing}(offset(t.tiny),usize(t.tiny),t.buffer)
+IOShared(t::BToken) = IOShared{Nothing}(offset(t.tiny),usize(t.tiny),t.buffer)
 
-IOShared(t::Token) = IOShared(BufferToken(t))
+IOShared(t::Token) = IOShared(BToken(t))
 
 IOShared(io::IOShared{Nothing}) = IOShared{Nothing}(io.readofs,(io.writeofs-io.readofs)%UInt64,share(io,io.limit))
 
@@ -63,7 +63,7 @@ IOShared(io::IOShared{Nothing}) = IOShared{Nothing}(io.readofs,(io.writeofs-io.r
 return a readonly buffer reference, share bytes are guaranteed not to change.
 
 Is regarded a private function. To obtain the text content of an IOShared,
-use read operations. BufferToken()
+use read operations. BToken()
 """
 function share(io::IOShared,share::UInt32)
     if (io.shared<share)
@@ -245,33 +245,35 @@ end
 
 "optimized: no string allocation"
 function Base.read(io::IO, ::Type{Token})
-    cat,size = _readtokenheader(io)
+    t = read(io,::HybridToken)
+    size = usize(t)
     if size <= MAX_DIRECT_SIZE
-        t = ht(_readdirecttoken(io,DirectToken(cat,size)))
+        t = hf(read(io,df(t))
         @inbounds Token(t,EMPTYSTRING)
     else
-        @inbounds Token(ht(FlyToken(cat,io.readofs,size)), io.buffer)
+        @inbounds Token(hf(uint(t)|io.readofs),io.buffer)
         io.readofs += size
         share(io,io.readofs)
     end
 end
 
 
-function Base.read(io::IO, ::Type{BufferToken})
-    cat,size = _readtokenheader(io)
-    @inbounds BufferToken( FlyToken(cat,size), read(io,size,String))
+function Base.read(io::IO, ::Type{BToken})
+    t = read(io,::HybridToken)
+    size = usize(t)
+    @inbounds BToken( bf(uint(t)|io.readofs),io.buffer)
 end
 
 "optimized: no string allocation"
 function Base.read(io::IOShared, ::Type{Token})
-    tt = read(io,HybridToken)
+    tt = read(io,HybridFly)
     if isdirect(tt)
         ss = EMPTYSTRING
     else
         # reference and skip string data in IOShared instance
         ofs = io.readofs
         size = usize(tt)
-        tt = ht((u64(tt)& ~OFFSET_BITS) | ofs)
+        tt = hf((u64(tt)& ~OFFSET_BITS) | ofs)
         ss = io.buffer
         io.readofs += size
         ss = share(io,io.readofs)
@@ -279,21 +281,21 @@ function Base.read(io::IOShared, ::Type{Token})
     @inbounds Token(tt,ss)
 end
 
-function Base.read(io::IOShared, ::Type{BufferToken})
+function Base.read(io::IOShared, ::Type{BToken})
     t = read(io,Token)
     tt = t.tiny
     if isdirect(tt)
         # TODO can we reference bytes in io instance in this case??
         # possibly dependent on endianness...
-        BufferToken(dt(tt))
+        BToken(df(tt))
     else
         # reference buffer
-        tt = ft(u64(tt)& ~OFFSET_BITS)
+        tt = bf(u64(tt)& ~OFFSET_BITS)
         size = usize(tt)
-        tt = ht((u64(tt)& ~OFFSET_BITS) | ofs)
+        tt = hf((u64(tt)& ~OFFSET_BITS) | ofs)
         ss = io.buffer
         io.readofs += size
-        @inbounds BufferToken(ft(tt), t.ss)
+        @inbounds BToken(bf(tt), t.ss)
     end
 end
 

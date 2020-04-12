@@ -18,13 +18,13 @@
 end
 
 # just to get it compiled in this demo
-struct BufferToken
+struct BToken
     cat::TCategory
     longtxt::String
 end
 
 # just to get it compiled in this demo
-struct DirectToken
+struct DirectFly
     cat::TCategory
     shorttxt::String
 end
@@ -33,17 +33,17 @@ end
 
 macro T_WHITE_str(txt)
     if ncodeunits(txt)>7
-        :(BufferToken(T_WHITE,$txt))
+        :(BToken(T_WHITE,$txt))
     else
-        :(DirectToken(T_WHITE,$txt))
+        :(DirectFly(T_WHITE,$txt))
     end
 end
 
 macro T_IDENT_str(txt)
     if ncodeunits(txt)>7
-        :(BufferToken(T_IDENT,$txt))
+        :(BToken(T_IDENT,$txt))
     else
-        :(DirectToken(T_IDENT,$txt))
+        :(DirectFly(T_IDENT,$txt))
     end
 end
 =#
@@ -64,9 +64,9 @@ for cat in instances(TCategory)
     eval(quote
         macro $(Symbol(Symbol(cat),"_str"))(txt)
             if ncodeunits(txt)>7
-                :(BufferToken($cat,$txt))
+                :(BToken($cat,$txt))
             else
-                :(DirectToken($cat,$txt))
+                :(DirectFly($cat,$txt))
             end
         end
     end)
@@ -78,9 +78,9 @@ for cat in instances(TCategory)
     eval(quote
         macro $(Symbol(Symbol(cat),"_str"))(txt)
             if ncodeunits(txt)>7
-                :(BufferToken(TCategory(Int($cat)),$txt))
+                :(BToken(TCategory(Int($cat)),$txt))
             else
-                :(DirectToken(TCategory(Int($cat)),$txt))
+                :(DirectFly(TCategory(Int($cat)),$txt))
             end
         end
     end)
@@ -91,9 +91,9 @@ for cat in instances(TCategory)
     eval(quote
         macro $(Symbol(Symbol(cat),"_str"))(txt)
             if ncodeunits(txt)>7
-                :(BufferToken($($(cat)),$txt))
+                :(BToken($($(cat)),$txt))
             else
-                :(DirectToken($($(cat)),$txt))
+                :(DirectFly($($(cat)),$txt))
             end
         end
     end)

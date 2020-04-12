@@ -47,8 +47,8 @@ T_END tokens are no tree nodes not part of the tree structure, itThe index of a 
 
 
 """
-mutable struct TokenTree <: AbstractTokenVector{HybridToken}
-    vec :: Vector{HybridToken}
+mutable struct TokenTree <: AbstractTokenVector{HybridFly}
+    vec :: Vector{HybridFly}
     buffer :: String # private storage shared by all elements
     used :: UInt32 # no of bytes currently used
     shared :: UInt32 # no of bytes in buffer shared with other objects

@@ -27,19 +27,19 @@ requires overloading of many of them.
 Every implementation must use Utf8 encoding: token methods operate
 mostly on Utf8 code units and rely on its properties.
 
-There is a Ttoken specific interface besides AbstractString API, in the
+There is a Token specific interface besides AbstractString API, in the
 source code it is characterized by chapter comments
 
 # implementations in this module
 
 This module supplies a very memory efficient implementation
-for very short tokens with [`DirectToken`](@ref), a
+for very short tokens with [`DirectFly`](@ref), a
 short string plus category in 8 bytes. It can act as a
 substitute for short String instances, avoiding any allocation and
 indirect (pointer) access. Data locality is improved, gaining further speed
 advantages by better CPU cache use.
 
-[`BufferToken`](@ref) stores larger strings, but needs an additional code
+[`BToken`](@ref) stores larger strings, but needs an additional code
 unit buffer. Tokens can share the same buffer, reducing overhead for heap
 management and even re-use content, like SubString does.
 
@@ -52,7 +52,7 @@ of a couple of bytes. For tokens in the sense of "atoms of text", a size in
 the range of a couple of bytes is expected. Text written by humans, like
 source code and bublished books, has sizes up to some MByte.
 
-[`Token`](@ref) is the combination of DirectToken and BufferToken in
+[`Token`](@ref) is the combination of DirectFly and BToken in
 one type.
 
 # further types and APIs in this package
@@ -72,13 +72,13 @@ In many applications, all token operations can work on one large buffer,
 eliminating contents copies when storing tokens into a TokenVector.can be expensiveIn many parsing scenarios, it is possible to most tokens stem from the same source. By having a
 IOShared instance can In scenarios where all tokens come from a shared IOShared,  and
 
-TinyToken is the abstract super type of the types presented above, subtypes
+FlyToken is the abstract super type of the types presented above, subtypes
 are 64bit flyweight token values. They are used directly in situations where
 no buffer is needed or known from context.
 See [`TokenVector`](@ref) as an example.
 
-[`PToken`](@ref) bundles a TinyToken with a buffer, [`Token`](@ref) is PToken
-using a HybridToken and the recommended immutable token type for general use.
+[`PToken`](@ref) bundles a FlyToken with a buffer, [`Token`](@ref) is PToken
+using a HybridFly and the recommended immutable token type for general use.
 PToken is quite similar to [`SubString`](@ref), with reduced maximal length
 in favor of a category field.
 
@@ -110,7 +110,7 @@ const Utf8String = Union{String,SubString{String},AbstractToken}
 number of code units in the buffer associated with an token
 before the first code unit belonging to the token.
 
-If code units are stored directly in a TinyToken, offset is 0.
+If code units are stored directly in a FlyToken, offset is 0.
 
 Buffer is not needed in this function, no consistency or bounds
 checks are performed.
@@ -123,7 +123,7 @@ end
 """
     isDirecty(t::AbstractToken) -> Bool
 
-true if t stores its code units directly in its TinyToken.
+true if t stores its code units directly in its FlyToken.
 """
 function isdirect(t::AbstractToken)
     throw(MethodError(offset, (t,)))
@@ -187,7 +187,7 @@ A string enclosed in single quotes. Some lexer will require exactly one
 character.
 
 ## T_EOL = 6
-End of line sequence, 1 or 2 characters, typically a TinyToken.
+End of line sequence, 1 or 2 characters, typically a FlyToken.
 In a context where line breaks have no syntactical meaning, a lexer can
 treat end of line characters as whitespace and never report T_EOL.
 
@@ -234,19 +234,19 @@ symbol, e.g. "*", ">>>" or "+=". A lexer may accept different notations for the
 same symbol, e. g. "<>", "!=" and "≠" for inequality,
 and may replace different notations by one of the others.
 
-Symbols usually fit into a DirectToken. Consider to grant this in your
-application (and use DirectToken for symbols).
+Symbols usually fit into a DirectFly. Consider to grant this in your
+application (and use DirectFly for symbols).
 
 In TokenTree, symbols can have children, to reflect the use of symbols
 as operators in common computer languages.
 
 ## T_KEY = 12
 
-Identifier recognized as keyword, typically a TinyToken. Lexers may support
+Identifier recognized as keyword, typically a FlyToken. Lexers may support
 different nonations for a keyword, and return a 'canonical' representation,
 e. g. converting SQL keywords to uppercase. If all T_KEY strings have a
 canonical representation with less than 8 code units, your application could
-restrict T_KEY tokens to type DirectToken.
+restrict T_KEY tokens to type DirectFly.
 
 Reserved words in programming languages are usually tokenized as T_KEY.
 In a TokenTree, they can have children, e. g. condition and action for
@@ -287,7 +287,7 @@ efficient representation. Exampie:
 
 T_INT"123"
 
-generates a DirectToken(T_INT,"123").
+generates a DirectFly(T_INT,"123").
 
 """
 @enum TCategory :: UInt8 begin
@@ -314,9 +314,9 @@ for cat in instances(TCategory)
     eval(quote
         macro $(Symbol(Symbol(cat),"_str"))(txt)
             if ncodeunits(txt)>7
-                :(BufferToken($($(cat)),$txt))
+                :(BToken($($(cat)),$txt))
             else
-                :(DirectToken($($(cat)),$txt))
+                :(DirectFly($($(cat)),$txt))
             end
         end
         export $(Symbol(cat))
@@ -426,25 +426,6 @@ Functions ncodeunits and sizeof are derived from usize
 """
 function usize end
 
-
-#= not helpful. Juloa Base has optimized c code, use that
-"generic comparison by code units - specialize on TinyToken-s"
-function cmp_codeunits(a::Utf8String, b::Utf8String)
-    al, bl = sizeof(a), sizeof(b)
-    ml = min(al, bl)
-    i = 1
-    @inbounds while i<=ml
-        ai = codeunit(a,i)
-        bi = codeunit(b,i)
-        ai < bi && return -1
-        ai > bi && return 1
-        i += 1
-    end
-    al < bl && return -1
-    al > bl && return 1
-    0
-end
-=#
 
 ## AbstractString API implementations which need no specialization
 

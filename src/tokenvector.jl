@@ -5,23 +5,23 @@ common supertype for all token vectors.
 
 
 """
-abstract type AbstractTokenVector{T <: TinyToken} <: AbstractVector{AbstractToken}
+abstract type AbstractTokenVector{T <: FlyToken} <: AbstractVector{AbstractToken}
 end
 
 """
 Memory-efficient vector of tokens.
 
 On write access, all tokens with code unit count below 8 are stored as
-[`DirectToken`](@ref).
+[`DirectFly`](@ref).
 
 Use this type if you expect a large percentage of tokens having less than
 8 code units. If performance matters more than memory efficiency, benchmark
-against [`BufferTokenVector`](@ref). Though TokenVector induces additional
-conditional code to test if a token is of type DirectToken, it can be faster,
+against [`BTokenVector`](@ref). Though TokenVector induces additional
+conditional code to test if a token is of type DirectFly, it can be faster,
 due to better memory locality and cache efficiency.
 """
-struct GenericTokenVector{T<:TinyToken} <: AbstractVector{Token}
-    vec :: Vector{HybridToken}
+struct GenericTokenVector{T<:FlyToken} <: AbstractVector{Token}
+    vec :: Vector{HybridFly}
     data :: IOShared
 end
 
@@ -30,19 +30,19 @@ const TokenVector = GenericTokenVector{Token}
 """
 token vector for larger tokens.
 
-All token content is stored in a separate buffer, no DirectToken use.
+All token content is stored in a separate buffer, no DirectFly use.
 Because memory usage is always higher than [`TokenVector`](@ref), the
 only reason to use it is higher performance. Performance highly depends on
 your usage pattern - it needs to be benchmarked. Indicators for a better
-performance of BufferTokenVector are
+performance of BTokenVector are
 
 ## low percentage of short tokens (code unit count below 8)
 ## Frequent conversion from token to SubString
 ## Frequent access to ncodeunits(token) without actually accessing code units
 
 """
-struct BufferTokenVector <: AbstractVector{BufferToken}
-    vec :: Vector{FlyToken}
+struct BTokenVector <: AbstractVector{BToken}
+    vec :: Vector{BufferFly}
     data :: IOShared
 end
 
@@ -50,7 +50,7 @@ end
 """
 The most commen token vector.
 """
-const TokenVector = PTokenVector{HybridToken}
+const TokenVector = PTokenVector{HybridFly}
 
 
 """
@@ -59,10 +59,10 @@ to reduce copy/pase for methods of different token types
 
 Requirement:
 
-Any subtype must have a *tiny::TinyToken* and a *buffer::String*
+Any subtype must have a *tiny::FlyToken* and a *buffer::String*
 field.
 """
-abstract type TinyBufferToken <: AbstractToken
+abstract type TinyBToken <: AbstractToken
 end
 
 
@@ -115,9 +115,9 @@ any pointer overhead.
 Combined with a code unit buffer, it can hold strings of a length below
 2**24. The flyweight value encodes an offset and a length, in this case.
 
-TinyToken can be used directly in application code if its length limit
+FlyToken can be used directly in application code if its length limit
 fits the use case. More common is a combination with an additional code unit
-buffer. The TinyToken bits pattern is interpreted differently, in this
+buffer. The FlyToken bits pattern is interpreted differently, in this
 case, as an offset (32bit) and a length (24bit).
 
 See [`Token`](@ref) and [`MutableToken`](@ref) for an implementation.
@@ -133,7 +133,7 @@ The encoding of the most significant byte is:
 ```
 
 bit7: tiny flag.
-    bit7=0: this is a self-contained TinyToken with
+    bit7=0: this is a self-contained FlyToken with
             0..7 code units
     bit7=1: this is a (category,length,offset) tuple,
             only valid in a context which supplies a
@@ -166,39 +166,39 @@ as an UInt32, giving the length in its lower 24-bit.
 
 The context must suppy a buffer containing code units.
 The offset gives the number of code units in the buffer
-before the first code unit of this TinyToken.
+before the first code unit of this FlyToken.
 
 Context is either an additional parameter in the
-functions dealing with a TinyToken, or an additional
+functions dealing with a FlyToken, or an additional
 field in a larger AbstractToken structure.
 """
-struct TinyToken <: AbstractToken
+struct FlyToken <: AbstractToken
     bits::Int64
 
     """
     default constructor
     """
-    function TinyToken(cat::TokenCategory, s::AbstractString)
+    function FlyToken(cat::TokenCategory, s::AbstractString)
 
         new(bits)
     end
 
     "override default constructor to convert anything to a string token"
-    TinyToken (value::Any) = TinyToken (U_STRING,string(value))
-    function TinyToken(::AsLatin{true},s::AbstractString)
+    FlyToken (value::Any) = FlyToken (U_STRING,string(value))
+    function FlyToken(::AsLatin{true},s::AbstractString)
     end
-    function TinyToken(t::AbstractToken)
+    function FlyToken(t::AbstractToken)
     end
 end
 
-const maxTinySize = 7 # maximal size of a direct string in TinyToken
+const maxTinySize = 7 # maximal size of a direct string in FlyToken
 
 
 """
 Immutable token, characteristics similar to SubString
 """
-struct Token <: TinyBufferToken
-    tiny :: TinyToken # current value, offset referencing buffer
+struct Token <: TinyBToken
+    tiny :: FlyToken # current value, offset referencing buffer
     buffer :: String # memory with token text data.
     # TODO any negative impact because of pointer field??
 end
@@ -208,8 +208,8 @@ end
 Mutable token, able to share its buffer with other tokens
 and ['SubString']@ref s
 """
-mutable struct MutableToken <: TinyBufferToken
-    tiny :: TinyToken # current value, offset referencing buffer
+mutable struct MutableToken <: TinyBToken
+    tiny :: FlyToken # current value, offset referencing buffer
     buffer :: String # PRIVATE!! memory with token text data.
     shared :: UInt32 #last index in buffer shared with other tokens
 end
@@ -225,13 +225,13 @@ the referenced buffer (not given as parameter, because not needed here)
 function offset end
 
 
-function offset(t::TinyToken)
+function offset(t::FlyToken)
     mask = (t.bits>>63) & (2^32-1) # 0 for direct CU, 0xffffffff else
     convert(UInt32,t.bits & mask)
 end
-offset(t::TinyBufferToken) = offset(t.tiny)
+offset(t::TinyBToken) = offset(t.tiny)
 
-function Base.ncodeunits(t::TinyToken)
+function Base.ncodeunits(t::FlyToken)
     # tricky code without jumps:
     # if s.bits is positive, we have ncodeunits in lowest 3 bits
     # this extracts the right part in final convert.
@@ -243,7 +243,7 @@ function Base.ncodeunits(t::TinyToken)
     convert(Int, ((t.bits &masklen)>>>32) | ((t.bits & (7<<56))>>>56))
 end
 
-Base.ncodeunits(t::TinyBufferToken) = ncodeunits(t.tiny)
+Base.ncodeunits(t::TinyBToken) = ncodeunits(t.tiny)
 
 # helper functions
 boundserr(t,i) = throw(BoundsError(t,i))
@@ -254,8 +254,8 @@ true, if code unit is UInt8 and 1 code unit == 1 character
 function islatin end
 
 islatin(t::AbstractToken) = (category(t)&8) > 0
-islatin(t::TinyToken) = t.bits&(1<<62) > 0
-islatin(t::TinyBufferToken) = islatin(t.tiny)
+islatin(t::FlyToken) = t.bits&(1<<62) > 0
+islatin(t::TinyBToken) = islatin(t.tiny)
 # following method is quite expensive ...
 islatin(s::AbstractString) = (codeunit(s)==UInt8) && (ncodeunits(s)=length(s))
 
@@ -264,8 +264,8 @@ islatin(s::AbstractString) = (codeunit(s)==UInt8) && (ncodeunits(s)=length(s))
 returns the category of a token
 """
 function category end
-category(t::TinyToken) = TokenCategory((t.bits>>59)&15)
-category(t::TinyBufferToken) = category(t.tiny)
+category(t::FlyToken) = TokenCategory((t.bits>>59)&15)
+category(t::TinyBToken) = category(t.tiny)
 
 Base.thisind(t::AbstractToken, i::Integer) = thisind(t,convert(Int,i))
 function Base.thisind(t::AbstractToken, i::Int)
@@ -297,10 +297,10 @@ end
 
 
 #=
-function TinyToken(s::String, category::UInt8=0)
+function FlyToken(s::String, category::UInt8=0)
     sz = sizeof(s)
     # try to encode in 7 bytes. tinytoken
-    if sz < sizeof(::TinyToken)
+    if sz < sizeof(::FlyToken)
         str :: Int64 = 0
         utf8Flag :: UInt8 = 0
         i = 0
@@ -314,38 +314,38 @@ function TinyToken(s::String, category::UInt8=0)
         p :: Ptr{UInt8} = pointer(s)
         (str *= 8) += codeunit(s,i)
 
-        str = (T(s |> pointer |> Ptr{TinyToken} |> Base.unsafe_load |> ntoh)
+        str = (T(s |> pointer |> Ptr{FlyToken} |> Base.unsafe_load |> ntoh)
     end
     # check for UTF8 encoded ISO-8859-1 string: sizeof(s)>=8 could be valid in this case
-    throw(ErrorException("supplied string size $sz exceeds size limit for TinyToken - use Token, instead"))
+    throw(ErrorException("supplied string size $sz exceeds size limit for FlyToken - use Token, instead"))
 
     bits_to_wipe = 8(sizeof(T) - sz)
-    content = (T(s |> pointer |> Ptr{TinyToken} |> Base.unsafe_load |> ntoh) >> bits_to_wipe) << bits_to_wipe
-    TinyToken{T}(content | T(sz))
+    content = (T(s |> pointer |> Ptr{FlyToken} |> Base.unsafe_load |> ntoh) >> bits_to_wipe) << bits_to_wipe
+    FlyToken{T}(content | T(sz))
 end
 
-String(s::TinyToken) = String(reinterpret(UInt8, [s.size_content|>ntoh])[1:sizeof(s)])
+String(s::FlyToken) = String(reinterpret(UInt8, [s.size_content|>ntoh])[1:sizeof(s)])
 
-Base.lastindex(s::TinyToken) = Int(s.size_content & 0xf)
-Base.iterate(s::TinyToken, i::Integer) = iterate(String(s), i)
-Base.iterate(s::TinyToken) = iterate(String(s))
-Base.sizeof(s::TinyToken) = Int(s.size_content & 0xf)
-Base.print(s::TinyToken) = print(String(s))
-Base.display(s::TinyToken) = display(String(s))
-Base.convert(::TinyToken{T}, s::String) where T = TinyToken{T}(s)
-Base.convert(::String, ss::TinyToken) = String(a) #reduce(*, ss)
-Base.firstindex(::TinyToken) = 1
-Base.ncodeunits(s::TinyToken) = ncodeunits(String(s))
-Base.codeunit(s::TinyToken, i) = codeunits(String(s), i)
-Base.isvalid(s::TinyToken, i::Integer) = isvalid(String(s), i)
+Base.lastindex(s::FlyToken) = Int(s.size_content & 0xf)
+Base.iterate(s::FlyToken, i::Integer) = iterate(String(s), i)
+Base.iterate(s::FlyToken) = iterate(String(s))
+Base.sizeof(s::FlyToken) = Int(s.size_content & 0xf)
+Base.print(s::FlyToken) = print(String(s))
+Base.display(s::FlyToken) = display(String(s))
+Base.convert(::FlyToken{T}, s::String) where T = FlyToken{T}(s)
+Base.convert(::String, ss::FlyToken) = String(a) #reduce(*, ss)
+Base.firstindex(::FlyToken) = 1
+Base.ncodeunits(s::FlyToken) = ncodeunits(String(s))
+Base.codeunit(s::FlyToken, i) = codeunits(String(s), i)
+Base.isvalid(s::FlyToken, i::Integer) = isvalid(String(s), i)
 
-Base.getindex(s::TinyToken{T}, i::Integer) where T = begin
+Base.getindex(s::FlyToken{T}, i::Integer) where T = begin
     print(i)
     Char((s.size_content << 8(i-1)) >> 8(sizeof(T)-1))
 end
-Base.collect(s::TinyToken) = getindex.(s, 1:lastindex(s))
+Base.collect(s::FlyToken) = getindex.(s, 1:lastindex(s))
 
-==(s::TinyToken, b::String) = begin
+==(s::FlyToken, b::String) = begin
     String(s)  == b
 end
 =#
