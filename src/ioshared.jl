@@ -581,10 +581,61 @@ function put(pool::IOShared, t::GenericToken, intern::Bool = false)
 end
 
 
-function tread(from::IOShared, f:HybridFly)
-
+function tread(io::IOShared, t::DirectFly) ::DirectFly
+    size = usize(t)
+    ensure_readable(size)
+    b = io.buffer
+    GC.preserve b begin
+        for i in 1:size
+            t = unsafe_setcodeunit(t,i,unsafe_load(io.ptr+io.readofs)
+            io.readofs += 1
+        end
+    end
+    t
 end
 
+
+# serializing of DirectFly
+function Base.write(io::IOShared, t::DirectFly)
+    write(io,hf(t))
+    size = usize(t)
+    ensure_writeable(size)
+    b = io.buffer
+    GC.preserve b begin
+        for i in 1:size
+            unsafe_store!(io.ptr+io.writeofs,@inbounds codeunit(t,i))
+            io.writeofs += 1
+        end
+    end
+end
+
+
+function Base.read(io::IOShared, ::Type{Token})
+    t = read(io,HybridFly)
+    size = usize(t)
+    if size <= MAX_DIRECT_SIZE
+        t = hf(read(io,df(t)))
+        return @inbounds Token(t,EMPTYSTRING)
+    end
+
+        @inbounds Token(t, read(io,size,String))
+    end
+
+    tt = read(io,HybridToken)
+    if isdirect(tt)
+        # TODO can we reference bytes in io instance in this case??
+        # possibly dependent on endianness...
+        BToken(df(tt))
+    else
+        # reference buffer
+        tt = bf(u64(tt)& ~OFFSET_BITS)
+        size = usize(tt)
+        tt = hf((u64(tt)& ~OFFSET_BITS) | ofs)
+        ss = io.buffer
+        io.readofs += size
+        @inbounds BToken(bf(tt), t.ss)
+    end
+end
 
 function Base.read(io::IOShared, ::Type{BToken})
     t = read(io,Token)
@@ -607,7 +658,7 @@ end
 
 function Base.unsafe_read(from::IOShared, p::Ptr{UInt8}, nb::UInt)
     #from.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
-    ensure_readable(nb)
+    ensure_readable(from,nb)
     b = from.buffer
     GC.@preserve b unsafe_copyto!(p, pointer(b)+from.readofs, nb)
     from.readofs += nb
@@ -615,18 +666,18 @@ function Base.unsafe_read(from::IOShared, p::Ptr{UInt8}, nb::UInt)
 end
 
 function Base.unsafe_write(to::IOShared, p::Ptr{UInt8}, nb::UInt)
-    ensure_writeable(nb)
+    ensure_writeable(to,nb)
     b = to.buffer
-    GC.@preserve b unsafe_copyto!(pointer(b)+to.writeofs), p, nb)
+    GC.@preserve b unsafe_copyto!(to.ptr+to.writeofs), p, nb)
     to.writeofs += nb
     nothing
 end
 
 
 function base.read(from::IOShared, ::Type{UInt8})
-    ensure_readable(1)
+    ensure_readable(from,1)
     b = from.buffer
-    GC.@preserve ret = from.buffer unsafe_load(from.ptr+from.readofs)
+    GC.@preserve b ret = unsafe_load(from.ptr+from.readofs)
     from.readofs += 1
     ret
 end

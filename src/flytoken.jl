@@ -416,7 +416,7 @@ into a DirectFly which already has category and size.
 """
 
 "read the string portion of a DirectFly"
-function read(io::IO, t::DirectFly) ::DirectFly
+function tread(io::IO, t::DirectFly) ::DirectFly
     for i in 1:usize(t)
         t = unsafe_setcodeunit(t,i,read(io,UInt8))
     end
@@ -462,7 +462,7 @@ BufferFly with size <=7.
 This is an internal, private helper method.
 It does NOT write any offset or content data!
 """
-function write(io::IO, t::HybridFly)
+function Base.write(io::IO, t::HybridFly)
     if isdirect(t)
         write(io,(uint(t)>>56)%UInt8)
         return nothing
@@ -514,7 +514,7 @@ end
 function Base.read(io::IO, ::Type{DirectFly})
     t = df(read(io,HybridFly))
     @boundscheck isdirect(t) || boundserror("size too long for DirectFly")
-    read(io,t)
+    tread(io,t)
 end
 
 
