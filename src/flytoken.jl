@@ -259,7 +259,7 @@ index must be 1..7, t mush have codeunit value 0 at index i.
 titled unsafe, because no checks are performed.
 """
 function unsafe_setcodeunit(t::DirectFly, index, codeunit::UInt8)
-    df( u64(t) | ( UInt64(codeunit)<< ((7-index)<<3)))
+    t | ( UInt64(codeunit)<< ((7-index)<<3))
 end
 
 offset(t::BufferFly) = (u64(t) & OFFSET_BITS)%UInt32
@@ -277,7 +277,6 @@ offset(t::HybridFly) = isdirect(t) ? offset(df(t)) : offset(bf(t))
 
 "empty token (offset, length are 0)"
 function BufferFly(cat::TCategory)
-#    bf(NOTTINY_BIT | UInt64(cat)<<59)
     bf(NOTTINY_BIT | (cat%UInt64)<<59)
 end
 
@@ -288,9 +287,9 @@ token with given size, bounds-checked, offset 0
 Base.@propagate_inbounds function BufferFly(cat::TCategory, size::UInt64)
     @boundscheck checksize(size,MAX_TOKEN_SIZE)
     if FLY_SPLIT_SIZE
-        bf((size&7)<<56 | (size>>>3)<<32 | u64(BufferFly(cat)))
+        BufferFly(cat) | ((size&7)<<56 | (size>>>3)<<32)
     else
-        bf(size<<32 | u64(BufferFly(cat)))
+        BufferFly(cat) | (size<<32)
     end
 end
 
@@ -305,7 +304,7 @@ with respect to the referenced buffer in your code elsewere.
 
 """
 Base.@propagate_inbounds function BufferFly(cat::TCategory, offset::UInt32, size::UInt64)
-    bf(u64(BufferFly(t),size)|offset)
+    BufferFly(t),size)|offset
 end
 
 
@@ -321,6 +320,15 @@ DirectFly(cat::TCategory) = df( UInt64(cat)<<59 )
 Base.@propagate_inbounds function DirectFly(cat::TCategory, size::UInt64)
     @boundscheck checksize(size,MAX_DIRECT_SIZE)
     df(u64(DirectFly(cat)) | size<<56)
+end
+
+
+
+"Construct a DirectFly for size beliw 8 else a BufferFly"
+Base.@propagate_inbounds function HybridFly(cat::TCategory, size::UInt64)
+    size <= MAX_DIRECT_SIZE ?
+        hf(DirectFly(cat,size)) :
+        hf(BufferFly(cat,size))
 end
 
 
@@ -466,7 +474,7 @@ function write(io::IO, t::HybridFly)
         write(io,b&0x7f)
         return nothing
     end
-    write(io,b) # large size bit is set becaise t not direct
+    write(io,b) # large size bit is set because t not direct
     if size<2048
         # 2-byte-format
         write(io,(size>>3)%UInt8) # is !=0 because size>7
@@ -485,12 +493,18 @@ end
 
 ## Base operators and functions overloading ##
 
+"bitwise OR applied to a FlyToken."
+Base.(|)(f::F, orValue::T) where {F<:FlyToken,T<:Unsigned} =
+    reinterpret(F,u64(f) | orValue)
 
+"bitwise AND applied to a FlyToken."
+base.(&)(f::F, andValue::T) where {F<:FlyToken,T<:Unsigned} =
+        reinterpret(F,u64(f) & andValue)
 
 # serializing of DirectFly
 function Base.write(io::IO, t::DirectFly)
     b = (u64(t)>> 56) % UInt8
-    write(io,b)
+    write(io,hf(t))
     for i in 1:usize(t)
         write(io, @inbounds codeunit(t,i))
     end

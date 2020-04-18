@@ -43,6 +43,8 @@ mutable struct IOShared{T <: MaybeIO} <: IO
     end
 end
 
+IOShared(limit::UInt32) = IOShared(limit,false,nothing)
+
 IOShared(s::SubString{String}) = IOShared{Nothing}(UInt32(s.offset),s.ncodeunits%UInt64,s.string)
 
 IOShared(s::String) = IOShared{Nothing}(zero(UInt32),(ncodeunits(s)%UInt64),s)
@@ -80,75 +82,110 @@ share(io::IOShared) = share(io,io.limit)
 "currently loaded content size in bytes. Changes e.g. on fill, flush, read, write"
 usize(io::IOShared) = (io.writeofs-io.readofs) % UInt64
 
-"""
-move memory within a String buffer.
 
-Is named unsafe, because changes in a String instance are unsafe if
-the string is referenced elsewere, and because no bounds checks are performed.
+"""
+move memory within a IOShared buffer: insert/delete at ofs
 
 Method is regarded private and intended to be used within IOShared, only.
+
+ofs is internal offset into io-s buffer.
+PRECOND: limit large enough, no share at ofs, no delete beyond io.writeofs
+ ofs <= io.writeofs,
+ if resize<0: ofs-resize <= io.writeofs
+
 """
-function unsafe_move!(io::IOShared, dest::UInt32, src::UInt32, count::UInt)
-    if count>0
-        GC.@preserve io # for safety. might be unnecessary
-        ccall(:memmove, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
-              io.ptr+dest, io.ptr+src, count)
+function _resize(io::IOShared, ofs:UInt32, resize:Int)
+    @boundscheck begin
+        io.shared <= ofs # never chance shared contents
+        && ofs <= io.writeofs # not beyond end of content
+        && ofs <= io.writeofs + resize  # no delete beyond content (resize<0)
+        && io.writeofs+resize <= io.limit # enough space (relevant if resize>0)
+        || boundserror(io,ofs, resize)
+    end
+    s = io.buffer
+    GC.@preserve s begin
+        if resize>=0
+            ccall(:memmove, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
+                  io.ptr+ofs+resize, io.ptr+ofs, io.writeofs-ofs)
+        else
+            ccall(:memmove, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
+                  io.ptr+ofs, io.ptr+ofs-resize, io.writeofs-ofs+resize)
+        end
     end
     nothing
 end
 
 
-
 """
-if io.flushable, write all current content to data sink.
+allocate a new buffer and preserve content, resizing at offset ofs.
 
-content is removed from this.
-no buffer reorganization, but flushing can increase
-re-use of an unshared buffer
-"""
-function Base.flush(io::IOShared{T} where T<:IO )
-    if io.flushable && usize(io) > 0
-        write(io.io,io.readofs,usize(io), io.buffer)
-        io.readofs = io.writeofs
-    end
-    nothing
-end
-
-
-"""
-allocate a new buffer and preserve content, inserting insert bytes at offset ofs.
-
-Method tries to flush! first - this might free up enough memory to that less
-data is copied and free memory is increased.
+Method tries to flush first, to reduce allocation as well as
+the amount of bytes to copy
 
 io is changed, adjusted ofs is returned
 
 ofs precondition: io.readOfs <= ofs <= io.writeOfs
 
 """
-function realloc!(io::IOShared, ofs::UInt32, insert::Int) ::UInt32
-    @boundscheck io.readofs <= ofs && ofs <= io.writeofs || boundserror(io,ofs)
+function realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
     flush(io)
-
+    size = usize(io)%Int + resize
+    @boundscheck begin
+        io.readofs <= ofs && ofs <= io.writeofs
+        && size >= 0 && size <= typemax(UInt32)
+        && (ofs-resize <= io.writeofs)
+        || boundserror(io,ofs,resize)
+    end
+    # new limit: several considerations.
+    # (1) at least, it must be >= size
+    # (2) should not be smaller then preferredlimit
+    # (3) ensure that write(UInt8) is O(1) ==> an O(1) realloc seldom a constantly growing buffer (by small appends)
     limit = io.preferredlimit
-    while usize(io)+insert > limit
+    while size > limit
         # enlarge
-        limit <<= 1
+        limit <<= 1 # ensures consideration (3): double buffer sizes
+        limit == 0 && limit = typemax(UInt32) # handles overflow
     end
-
-    if io.io isa Nothing
-
+    buf = _string_n(limit)
+    ptr = pointer(buf)
+    count = (ofs - io.readofs) %UInt
+    GC.@preserve buffer buf # for safety. might be unnecessary
+    begin
+        ## copy first part
+        if count>0
+            ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
+                  ptr, io.ptr+io.readofs, count)
+        end
+        # copy 2nd part: ofs..io.writeofs
+        if resize<0
+            count2 =  (io.writeofs-ofs+resize) %UInt
+            if count2>0
+                ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
+                    ptr+count, io.ptr+ofs-resize, count2)
+            end
+        else
+            count2 =  (io.writeofs-ofs) %UInt
+            if count2>0
+                ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
+                    ptr+count+resize, io.ptr+io.ofs, count2)
+            end
+        end
     end
-    ofs = flush!(io)
+    ofs -= io.readofs
+    io.readofs = 0
+    io.shared = 0
+    io.writeofs = size %UInt32
+    io.limit = limit
+    io.buffer = buf
+    io.ptr = ptr
+    return ofs
 end
-
-
 
 
 """
 ensure that io.buffer is writeable starting at ofs, and resize current content at ofs.
 
-If resize is negative, deletion is restricted to the current size.
+If resize is negative, deletion is restricted to the current content.
 If io.shared>ofs, or if io.limit < ofs+resize, a new buffer is allocated.
 
 Buffer allocation may change offsets, i.e. io.readofs, io.writeofs and ofs.
@@ -157,57 +194,223 @@ Instance variables are adjusted, the adjusted value of ofs is returned by modify
 Return adjusted ofs
 """
 function modify!(io::IOShared, ofs::UInt32, resize::Int)
-    @boundscheck checkbounds(io,ofs)
-    if resize<0
-        # correct resize if it would delete beyond end of content
-        minresize = Int(ofs)-io.writeofs
-        if (minresize > resize)
-            resize = minresize
+    if io.shared<=ofs
+        # good chances for a noop
+        if io.writeofs+resize<=io.limit
+            # insert/delete
+            if ofs==io.writeofs && resize >=0
+                # normal append: expected to be the most frequent case
+                return ofs
+            end
+            _resize(io,ofs,resize)
+            return ofs
         end
-        if io.shared>ofs
-            # we need reallocation. Rare case, simple solution
-            ofs = realloc!(io,ofs,0)
-        end
-        unsafe_move!(io,ofs,ofs-resize,io.writeofs+resize)
-    else
-        if io.shared>ofs || ofs+resize > io.limit
-            # we need reallocation
-            ofs = realloc(io,ofs,resize)
-        else
-            unsafe_move!(io,ofs+resize,ofs,io.writeofs-ofs)
+        # not enough space at end - can we reuse space at beginning?
+        flush(io)
+        delta::Int = io.shared - io.readofs # bytes deleteable at shared if <0
+        if io.writeofs+resize+delta <= io.limit
+            # resizing is enough
+            _resize(io,io.shared,delta) # remove free space at beginning
+            ofs += delta
+            _resize(io,ofs,resize)
+            return ofs
         end
     end
-    ofs
+    # nothing but realloc helps ...
+    realloc(io,ofs,resize)
 end
 
 
-function ensure_writeable(io::IOShared, count::UInt64)
+function ensure_writeable(io::IOShared, count::Int)
+    modify!(io,io.writeofs,count)
+    nothing
+end
+
+
+"""
+    ensure_readable(io::IOShared, count::UInt64)::Bool
+
+ensure that count bytes can be read from io or throw an error.
+"""
+function ensure_readable(io::IOShared, count::UInt32)
+    usize(io) >= count && return
+    if !(io.io isa Nothing)
+        fill(io,count-usize(io)%UInt32)
+        usize(io) >= count && return
+    end
+    error("read request beyond end-of-data",io,count)
 end
 
 
 
+function fill end
 
-#=
 
-# no overlap handling
-ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
-      dest, src, n)
+"""
+    fill(io::IO,count::UInt32)
 
-# overlap handling
+try to read at least count bytes into io.
+n, the number of bytes read, may vary a lot:
 
-function unsafe_copyto!(dest::Ptr{T}, src::Ptr{T}, n) where T
-    # Do not use this to copy data between pointer arrays.
-    # It can't be made safe no matter how carefully you checked.
-    ccall(:memmove, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
-          dest, src, n*sizeof(T))
-    return dest
+n==0 (because nothing is available),
+n < count (because only n bytes are available)
+n == count (very unlikely)
+n > count (we have more bytes available and more space in io.buffer)
+
+NOOP if IO is flushable or io <:IO{Nothing}
+"""
+fill(io::IO,count::UInt32) = nothing
+
+function fill(io::IO{T}, count::UInt32) where T <: IO
+    io.flushable && return nothing
+    avail = min(bytesavailable(io.io), typemax(UInt32)) % UInt32
+    if count > avail
+        count = avail
+    end
+    # count is now fill request, reduced it less is available
+    if count > io.limit-io.writeofs
+        # need more space
+        if io.readofs-io.share + count <= io.limit-io.writeofs
+            # we can move in buffer!
+            resize(io,io.share,io.share-io.readofs)
+        else
+            # need new buffer :-(
+            realloc(io,io.writeofs,count)
+        end
+    end
+    # enough space to fulfil request: can we fill more than needed?
+    if io.limit-io.writeofs > count
+        count = min(avail, io.limit-io.writeofs)
+    end
+    # finally, do fill
+    s = io.buffer
+    GC.@preserve s unsafe_read(io.io,io.ptr+io.writeofs,count%UInt64)
+    io.writeofs += count
+    nothing
 end
-=#
+
+
+"""
+locate a single byte in a buffer.
+
+return typemax(UInt32) if not found or 1st offset found.
+
+"""
+function locate(pool::IOShared,s::UInt8)
+    size = usize(pool)%Int
+    p = pool.ptr+pool.readofs
+    b = pool.buffer
+    GC.@preserve b
+        q = ccall(:memchr, Ptr{UInt8}, (Ptr{UInt8}, Int32, Csize_t), p, s, size)
+    q == C_NULL ? typemax(UInt32) : (q-p)%UInt32
+end
+
+
+minihash(v:UInt8) = (1%UInt64)<<(v&63)
+
+
+"""
+    locate(pool::IOShared,ofs::UInt32,size::UInt64,s::String)
+
+Search in pool for a byte sequence of size bytes, beginning at
+offset ofs (0-based!) in String s.
+
+Return the offset (0-based) in pool.buffer or typemax(UInt32) (not found).
+
+TODO use boyer-moore search if size and usize(pool) are 'large'.
+TODO search for last 32 bytes if size>32 - that maximizes skip distance
+"""
+function locate(pool::IOShared,ofs::UInt32,size::UInt64,s::String)
+    if size == 0
+        return pool.readofs
+    end
+    if size == 1
+        return locate(pool, codeunit(s,ofs+1))
+    end
+    s_ptr = pointer(s)
+    s_end = s_ptr +size
+    p_ptr = pool.ptr+pool.readofs
+    p_size = usize(pool)
+    buffer = pool.buffer
+    GC.@preserve buffer s begin
+        cs_last = unsafe_load(s_ptr+size-1)
+        if size == 1
+            # single byte search
+            return locate(io, cs_last)
+        end
+        # TODO: classical brute force search for very small size eg <=3 or 7
+        # TODO: search with boyer-moore for larger sizes eg>15
+        # search adopted from in _searchindex(s::ByteArray, t::ByteArray, i::Integer)
+        # build minihash union
+        bloom = 0%UInt64 # ORed minihashes s[1..size-1]
+        skip = size # skip if last byte matches, some other byte not
+        j = size-1
+        # build bloom mask and maximal skip
+        while j-=1 >= 0
+            cs = unsafe_load(s_ptr+j)
+            bloom |= minihash(cs)
+            if cs==cs_last
+                skip = min(skip,size-j-1)
+            end
+        end
+        # now bloom is ORed hash of all bytes in s except the last one
+        # minihash(byte) & bloom == 0 implies: byte does not occur in s,
+        # except last byte.
+        # loop for all possible matches of last byte: i=size-1..p_size-1
+        i = size-1
+        while i < p_size
+            cp = unsafe_load(p_ptr+i) # last byte in current match candidate
+            #skip = 0 # we have not determined skip distance
+            if cp==cs_last
+                ## last byte matches. test successive backwards up to i-size+1
+                j = size-1
+                p0 = p_ptr+i-j # pointer to offset 0 in current match
+                while j-=1 >= 0
+                    if unsafe_load(p0+j) != unsafe_load(s_ptr+j)
+                        break
+                    end
+                end
+                if j<0
+                    #match
+                    return i-(size-1) # offset of 1st byte
+                end
+                # no match.
+                i += skip
+            elseif bloom & minihash(cp) == 0
+                # cp does not occur in s
+                i += size
+            elseif
+                # default skip: 1 byte
+                i += 1
+            end
+        end
+    end
+end
+
 
 
 
 ## Base API
-##
+
+
+
+"""
+if io.flushable, write all current contents to data sink.
+
+content is removed from this.
+no buffer reorganization, but flushing can increase
+re-use of an unshared buffer
+"""
+function Base.flush(io::IOShared{T<:IO})
+    if io.flushable && usize(io) > 0
+        twrite(io.io,io.readofs,usize(io), io.buffer)
+        io.readofs = io.writeofs
+    end
+    nothing
+end
+
+
+
 
 Base.copy(b::IOShared{Nothing}) = IOShared(b)
 
@@ -232,9 +435,9 @@ end
 
 function Base.skip(io:IOShared, delta::Integer)
     d = UInt32(delta) #  checks negative
-    if io.writeofs-io.readofs > d
+    if io.writeofs-io.readofs < d
         fill(d)
-        if io.writeofs-io.readofs > d
+        if io.writeofs-io.readofs < d
             d = io.writeofs-io.readofs
         end
     end
@@ -243,43 +446,145 @@ function Base.skip(io:IOShared, delta::Integer)
 end
 
 
-"optimized: no string allocation"
-function Base.read(io::IO, ::Type{Token})
+"read token shared (no string allocation)"
+function Base.read(io::IOShared, ::Type{Token})
     t = read(io,::HybridToken)
     size = usize(t)
     if size <= MAX_DIRECT_SIZE
         t = hf(read(io,df(t))
-        @inbounds Token(t,EMPTYSTRING)
+        @inbounds bt = Token(t,EMPTYSTRING)
     else
-        @inbounds Token(hf(uint(t)|io.readofs),io.buffer)
+        @inbounds bt = Token(hf(uint(t)|io.readofs),io.buffer)
         io.readofs += size
         share(io,io.readofs)
     end
+    bt
 end
 
 
-function Base.read(io::IO, ::Type{BToken})
+"read token shared (no string allocation)"
+function Base.read(io::IOShared, ::Type{BToken})
     t = read(io,::HybridToken)
     size = usize(t)
-    @inbounds BToken( bf(uint(t)|io.readofs),io.buffer)
+    tt = bf(uint(t)|io.readofs)
+    io.readofs += size
+    @inbounds  BToken(tt,share(io,io.readofs))
 end
+
+
 
 "optimized: no string allocation"
 function Base.read(io::IOShared, ::Type{Token})
     tt = read(io,HybridFly)
-    if isdirect(tt)
-        ss = EMPTYSTRING
+    ss = EMPTYSTRING
+    size = usize(tt)
+    if size <= MAX_DIRECT_SIZE
+        tt = hf(read(io,df(tt))
     else
         # reference and skip string data in IOShared instance
-        ofs = io.readofs
-        size = usize(tt)
-        tt = hf((u64(tt)& ~OFFSET_BITS) | ofs)
-        ss = io.buffer
+        tt = hf((u64(tt)) | io.readofs) # add offset
         io.readofs += size
         ss = share(io,io.readofs)
     end
     @inbounds Token(tt,ss)
 end
+
+"""
+    unsafe_tread(from::IOShared, fly::HybridFly) ::Token
+
+read contents of an incomplete HybridFly (only category, size is defined,
+other bytes are 0) and returns it as Token.
+
+Method is named unsafe because returned Token references the buffer of from
+without explicit sharing. Returned Token might become invalid with the next
+operation on from.
+
+This is an internal helper method. Use tread(from,fly) in application code,
+which implements proper sharing.
+"""
+function unsafe_tread(from::IOShared, fly::HybridFly) ::Token
+    if isdirect(fly)
+        return hf(read(from,fly))
+    end
+    size = usize(fly)
+    ensure_readable(from, size%UInt32)
+    fly = fly | from.readofs
+    from.readofs += size
+    Token(fly,from.buffer)
+end
+
+
+
+
+"""
+read a Token using size and category from an incomplete HybridFly
+"""
+function tread(from::IOShared, t::HybridFly) ::Token
+    ret = unsafe_tread(from,t)
+    share(from,from.readofs)
+    ret
+end
+
+
+
+"""
+    Base.read(io::IOShared, fly::HybridFly, pool::IOShared, intern::Bool=false)
+
+read contents for an incomplete  HybridFly (category and size is defined,
+all other bytes are 0). Such a HybridFly is constructed by HybridFly(category,size)
+or by reading a hybridFly from some IO.
+
+If fly is a DirectFly, return it with contents read from io.
+Otherwise, read contents and store it in pool, without sharing it with io.
+If intern is true, pool is searched if it already contains contents.
+If not found, contents is appended to pool.
+The offset in pool is returned within the HybridFly.
+
+This method is intended for a scenario where sharing of io is ineffective and
+should be avoided.
+It avouds copying the bufer twiceto be avoided
+found, contents is appended to pool
+"""
+function put(pool::IOShared, t::GenericToken, intern::Bool = false)
+    isdirect(t) && return t # nothing to do on DirectToken
+    size = usize(t)
+    ofs = typemax(UInt32)
+    if intern
+        ofs = locate(pool,offset(t),size,t.buffer)
+    end
+    if ofs ==typemax(UInt32)
+        unsafe_write
+        ensure_writeable(pool,size)
+        ofs = pool.writeofs
+
+        pool.share(ofs+size%UInt32)
+        return Token((t.fly & !OFFSET_BITS) | ofs),pool.share(ofs+size%UInt32))
+    end
+    twrite(pool,from.readofs,size,from.buffer)
+
+
+    tt = read(io,HybridFly)
+
+    ss = EMPTYSTRING
+    size = usize(tt)
+    if size <= MAX_DIRECT_SIZE
+        return hf(read(io,df(tt))
+    else
+        if intern
+            ofs = locate(buffer,io.readofs,usize(tt),io.buffer)
+        # reference and skip string data in IOShared instance
+        tt = hf((u64(tt)) | io.readofs) # add offset
+        io.readofs += size
+        ss = share(io,io.readofs)
+    end
+    @inbounds Token(tt,ss)
+end
+
+
+function tread(from::IOShared, f:HybridFly)
+
+end
+
 
 function Base.read(io::IOShared, ::Type{BToken})
     t = read(io,Token)
@@ -300,21 +605,30 @@ function Base.read(io::IOShared, ::Type{BToken})
 end
 
 
-
 function Base.unsafe_read(from::IOShared, p::Ptr{UInt8}, nb::UInt)
     #from.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
     ensure_readable(nb)
     b = from.buffer
-    GC.@preserve b unsafe_copyto!(p, pointer(b, from.readofs), nb)
+    GC.@preserve b unsafe_copyto!(p, pointer(b)+from.readofs, nb)
     from.readofs += nb
     nothing
 end
 
+function Base.unsafe_write(to::IOShared, p::Ptr{UInt8}, nb::UInt)
+    ensure_writeable(nb)
+    b = to.buffer
+    GC.@preserve b unsafe_copyto!(pointer(b)+to.writeofs), p, nb)
+    to.writeofs += nb
+    nothing
+end
 
-function read(from::IOShared, ::UInt8)
+
+function base.read(from::IOShared, ::Type{UInt8})
     ensure_readable(1)
-    ptr
-    GC.@preserve b =
+    b = from.buffer
+    GC.@preserve ret = from.buffer unsafe_load(from.ptr+from.readofs)
+    from.readofs += 1
+    ret
 end
 
 function read(from::IOShared, T::Union{Type{Int16},Type{UInt16},Type{Int32},Type{UInt32},Type{Int64},Type{UInt64},Type{Int128},Type{UInt128},Type{Float16},Type{Float32},Type{Float64}})
@@ -322,29 +636,13 @@ function read(from::IOShared, T::Union{Type{Int16},Type{UInt16},Type{Int32},Type
     ensure_readable(nb)
     b = from.buffer
     GC.@preserve b begin
-        ptr::Ptr{T} = pointer(b, from.readofs)
+        ptr::Ptr{T} = from.ptr+from.readofs
         x = unsafe_load(ptr)
     end
     from.readofs += nb
     return x
 end
 
-function read_sub(from::GenericIOBuffer, a::AbstractArray{T}, offs, nel) where T
-    @assert !has_offset_axes(a)
-    from.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
-    if offs+nel-1 > length(a) || offs < 1 || nel < 0
-        throw(BoundsError())
-    end
-    if isbitstype(T) && isa(a,Array)
-        nb = Uint(nel * sizeof(T))
-        GC.@preserve a unsafe_read(from, pointer(a, offs), nb)
-    else
-        for i = offs:offs+nel-1
-            a[i] = read(to, T)
-        end
-    end
-    return a
-end
 
 @inline function read(from::IOShared, ::Type{UInt8})
     from.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
@@ -564,16 +862,11 @@ function unsafe_write(to::GenericIOBuffer, p::Ptr{UInt8}, nb::UInt)
     return written
 end
 
-function write_sub(to::GenericIOBuffer, a::AbstractArray{UInt8}, offs, nel)
-    @assert !has_offset_axes(a)
-    if offs+nel-1 > length(a) || offs < 1 || nel < 0
-        throw(BoundsError())
-    end
-    GC.@preserve a unsafe_write(to, pointer(a, offs), UInt(nel))
-end
 
-@inline function write(to::GenericIOBuffer, a::UInt8)
-    ensureroom(to, UInt(1))
+
+@inline function write(to::IOShared, a::UInt8)
+    ensure_writeable(1)
+
     ptr = (to.append ? to.writeofs+1 : to.readofs)
     if ptr > to.limit
         return 0
