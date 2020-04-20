@@ -9,9 +9,10 @@ mutable struct LocateStats
     compareOtherByte :: Int
     bloomTest :: Int
     bloomSkip :: Int
+    bloomhalf :: Int
     skips :: Int
 end
-LocateStats()=LocateStats(0,0,0,0,0)
+LocateStats()=LocateStats(0,0,0,0,0,0)
 
 
 
@@ -54,8 +55,8 @@ function _searchindex_julia(s::ByteArray, t::ByteArray, i::Integer,ls::LocateSta
         if _nthbyte(s,i+n) == tlast
             # check candidate
             j = 0
+            ls.compareOtherByte += 1
             while j < n - 1
-                ls.compareOtherByte += 1
                 if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
                     break
                 end
@@ -126,8 +127,8 @@ function _searchindex_v1(s::ByteArray, t::ByteArray, i::Integer,ls::LocateStats)
         if silast == tlast
             # check candidate
             j = 0
+            ls.compareOtherByte += 1
             while j < n - 1
-                ls.compareOtherByte += 1
                 if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
                     break
                 end
@@ -204,8 +205,8 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,ls::LocateStats)
             if silast == tlast
                 # check candidate
                 j = 0
+                ls.compareOtherByte += 1
                 while j < n - 1
-                    ls.compareOtherByte += 1
                     if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
                         break
                     end
@@ -227,6 +228,74 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,ls::LocateStats)
         end
     end
 
+    0
+end
+
+
+
+"""
+variant: reordered v2
+"""
+function _searchindex_v2a(s::ByteArray, t::ByteArray, i::Integer,ls::LocateStats)
+    n = sizeof(t)
+    m = sizeof(s)
+
+    if n == 0
+        return 1 <= i <= m+1 ? max(1, i) : 0
+    elseif m == 0
+        return 0
+    elseif n == 1
+        return something(findnext(isequal(_nthbyte(t,1)), s, i), 0)
+    end
+
+    w = m - n
+    if w < 0 || i - 1 > w
+        return 0
+    end
+
+    skip = n # -1 removed because unconditional i +=1 at end of main loop removed
+    tlast = _nthbyte(t,n)
+    bloom_mask = UInt64(_search_bloom_mask(tlast))
+    for j in 1:n-1 # n-1: last byte of pattern is already in bloom filter
+        bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
+        if _nthbyte(t,j) == tlast
+            skip = n - j # -1 removed because unconditional i +=1 at end of main loop removed
+        end
+    end
+
+    i -= 1
+    while i <= w
+        silast =  _nthbyte(s,i+n)
+        ls.bloomTest += 1
+        if bloom_mask & _search_bloom_mask(silast) == 0
+            ls.bloomSkip += 1
+            i += n
+            continue
+        end
+        ls.compareLastByte += 1
+        if silast != tlast
+            # worst case: minimal skip
+            i += 1
+            continue
+        end
+        # check candidate
+        j = 0
+        ls.compareOtherByte += 1
+        while j < n - 1
+            if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
+                break
+            end
+            j += 1
+        end
+        # match found
+        if j == n - 1
+            return i+1
+        end
+        # no match, use skip distance
+        # original code does bloom test assuming skip==1 here
+        # better postpone that to next ineration
+        i += skip
+    end
     0
 end
 
@@ -277,9 +346,9 @@ function _searchindex_v3(s::ByteArray, t::ByteArray, i::Integer,ls::LocateStats)
             ls.compareLastByte += 1
             if silast == tlast
                 # check candidate
+                ls.compareOtherByte += 1
                 j = 0
                 while j < n - 1
-                    ls.compareOtherByte += 1
                     if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
                         break
                     end
@@ -305,20 +374,100 @@ function _searchindex_v3(s::ByteArray, t::ByteArray, i::Integer,ls::LocateStats)
 end
 
 
+"""
+variant: like v3 plus v2 (2 bloom filter)
+"""
+function _searchindex_v4(s::ByteArray, t::ByteArray, i::Integer,ls::LocateStats)
+    n = sizeof(t)
+    m = sizeof(s)
+
+    if n == 0
+        return 1 <= i <= m+1 ? max(1, i) : 0
+    elseif m == 0
+        return 0
+    elseif n == 1
+        return something(findnext(isequal(_nthbyte(t,1)), s, i), 0)
+    end
+
+    w = m - n
+    if w < 0 || i - 1 > w
+        return 0
+    end
+
+    skip = n # -1 removed because unconditional i +=1 at end of main loop removed
+    tlast = _nthbyte(t,n)
+    bloom_mask = UInt64(_search_bloom_mask(tlast))
+    bloom_32 = bloom_mask
+    bloom_size = 1
+    for j in 1:n-1 # n-1: last byte of pattern is already in bloom filter
+        bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
+        if (j>n/2)
+            bloom_half |= _search_bloom_mask(_nthbyte(t,j))
+            bloom_size += 1
+        end
+        if _nthbyte(t,j) == tlast
+            skip = n - j # -1 removed because unconditional i +=1 at end of main loop removed
+        end
+    end
+
+    i -= 1
+    while i <= w
+        silast =  _nthbyte(s,i+n)
+        ls.bloomTest += 1
+        hash =  _search_bloom_mask(silast)
+        if bloom_mask & hash == 0
+            ls.bloomSkip += 1
+            i += n
+        else
+            ls.bloomTest += 1
+            if (bloom_half & hash) == 0
+                i += bloom_size
+                ls.bloomhalf += 1
+            else
+                ls.compareLastByte += 1
+                if silast == tlast
+                    # check candidate
+                    ls.compareOtherByte += 1
+                    j = 0
+                    while j < n - 1
+                        if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
+                            break
+                        end
+                        j += 1
+                    end
+                    # match found
+                    if j == n - 1
+                        return i+1
+                    end
+                    # no match, use skip distance
+                    # original code does bloom test assuming skip==1 here
+                    # better postpone that to next ineration
+                    i += skip
+                else # worst case: minimal skip
+                    i += 1
+                end
+            end
+        end
+    end
+
+    0
+end
+
+
 function runbench(f::Function,s::ByteArray,t::ByteArray)
     print(string(f),": ")
     l=LocateStats()
     elapsedtime = time_ns()
     pos=f(s,t,1,l)
     print(time_ns() - elapsedtime)
-    println(" last==",l.compareLastByte,", other==",l.compareOtherByte,", bloom==", l.bloomTest, " #",l.bloomSkip)
+    println(" last==",l.compareLastByte,", other==",l.compareOtherByte,", bloom==", l.bloomTest, " #",l.bloomSkip, " ^",l.bloomhalf)
     pos
 end
 
 
-function benchmark(patternsize::Int, textsize::Int)
-    s = rand(0x20:0x7f,textsize) # array to search in
-    t = rand(0x20:0x7f,200) # pattern to search
+function benchmark(alphabetsize::Int,patternsize::Int, textsize::Int)
+    s = rand(0x00:alphabetsize%UInt8,textsize) # array to search in
+    t = rand(0x00:alphabetsize%UInt8,patternsize) # pattern to search
     for j in 1:patternsize # pattern size
         if j==1
             tj = unsafe_wrap(Vector{UInt8},"world")
@@ -332,7 +481,9 @@ function benchmark(patternsize::Int, textsize::Int)
         p0 = runbench(_searchindex_julia,sj,tj)
         p1 = runbench(_searchindex_v1,sj,tj)
         p2 = runbench(_searchindex_v2,sj,tj)
+        p2 = runbench(_searchindex_v2a,sj,tj)
         p3 = runbench(_searchindex_v3,sj,tj)
+        p4 = runbench(_searchindex_v4,sj,tj)
         if p0!=p1 || p1!=p2 || p2!=p3
             println("ERROR p0=$p0, p1=$p1, p2=$p2, p3=$p3")
         else
@@ -341,4 +492,4 @@ function benchmark(patternsize::Int, textsize::Int)
     end
 end
 
-benchmark(3,100)
+benchmark(128,3,100)
