@@ -26,7 +26,6 @@ end
 
 function Base.print(io::IO,s::Stats)
     for p in s.dict
-        print(io,string(p.first))
         for j in Int(typemin(StatsFields)):Int(typemax(StatsFields))
             print(io,string(p.first),",",StatsFields(j))
             for v in p.second[:,j]
@@ -666,11 +665,9 @@ end
 
 function runbench(f::Function,s::ByteArray,t::ByteArray, stats::Stats)
     #print(string(f),": ")
-    elapsedtime = time_ns()
     sf = zeros(Int,Int(typemax(StatsFields)))
+    elapsedtime = time_ns()
     pos=f(s,t,1,sf)
-    #print(time_ns() - elapsedtime," ")
-    #print("t=",sizeof(t),t)
     sf[Int(SFtime)] = (time_ns() - elapsedtime)%Int
     record(stats,f,sizeof(t),sf)
     pos
@@ -681,8 +678,7 @@ function benchmark(alphabetsize::Int , patternsize::Int, textsize::Int, statsfil
     s = rand(0x00:alphabetsize%UInt8,textsize) # array to search in
     t = rand(0x00:alphabetsize%UInt8,patternsize) # pattern to search
     stats = Stats(patternsize)
-    j = patternsize
-    while (j>=3)
+    for j in 4:patternsize
         tj = t[1:j] # does allocation here has any effect on benchmarking??!
         #println()
         #println("benchmark with pattern size $j")
@@ -699,7 +695,6 @@ function benchmark(alphabetsize::Int , patternsize::Int, textsize::Int, statsfil
         else
             #println("found at $p0")
         end
-        j -= 1
     end
     if statsfile!=""
         io = open(statsfile, "w")
