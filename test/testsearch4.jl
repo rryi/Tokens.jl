@@ -225,7 +225,7 @@ function _searchindex_v1(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
 end
 
 
-
+# skip-optimized julia version
 function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     n = sizeof(t)
     m = sizeof(s)
@@ -243,12 +243,12 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
         return 0
     end
 
-    bloom_mask = UInt64(_search_bloom_mask(tlast))
     skip = n - 1
     tlast = _nthbyte(t,n)
+    bloom_mask = UInt64(_search_bloom_mask(tlast))
     for j in 1:n-1
         bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
-        if _nthbyte(t,j) == tlast &&
+        if _nthbyte(t,j) == tlast
             skip = n - j - 1
         end
     end
@@ -310,6 +310,7 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
 end
 
 
+# skip-optimized julia version,
 function _searchindex_v3(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     n = sizeof(t)
     m = sizeof(s)
@@ -327,13 +328,13 @@ function _searchindex_v3(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
         return 0
     end
 
-    bloom_mask = UInt64(0)
-    skip = n - 1
+    skip = n
     tlast = _nthbyte(t,n)
-    for j in 1:n
+    bloom_mask = UInt64(_search_bloom_mask(tlast))
+    for j in 1:n-1
         bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
-        if _nthbyte(t,j) == tlast && j < n
-            skip = n - j - 1
+        if _nthbyte(t,j) == tlast
+            skip = n - j
         end
     end
     loops = 0
@@ -365,13 +366,13 @@ function _searchindex_v3(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
                 i += n
             end
         else
+            i += 1
             bloomtests += 1
-            if bloom_mask & _search_bloom_mask(_nthbyte(s,i+n+1)) == 0
+            if bloom_mask & _search_bloom_mask(_nthbyte(s,i+n)) == 0
                 bloomskips += 1
                 i += n
             end
         end
-        i += 1
     end
     if i==w
         # test end match
@@ -392,6 +393,7 @@ function _searchindex_v3(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     sv[Int(SFbloombits)] = bitcount(bloom_mask)
     0
 end
+
 
 
 function runbench(f::Function,s::ByteArray,t::ByteArray, stats::Stats)
