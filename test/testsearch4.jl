@@ -225,6 +225,7 @@ function _searchindex_v1(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
 end
 
 
+
 function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     n = sizeof(t)
     m = sizeof(s)
@@ -242,12 +243,12 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
         return 0
     end
 
-    bloom_mask = UInt64(0)
+    bloom_mask = UInt64(_search_bloom_mask(tlast))
     skip = n - 1
     tlast = _nthbyte(t,n)
-    for j in 1:n
+    for j in 1:n-1
         bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
-        if _nthbyte(t,j) == tlast && j < n
+        if _nthbyte(t,j) == tlast &&
             skip = n - j - 1
         end
     end
@@ -272,13 +273,12 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
                 return i+1 # no stats update
             end
 
-            # no match, try to rule out the next character
+            # no match: skip and test bloom
+            i += skip
             bloomtests += 1
-            if bloom_mask & _search_bloom_mask(_nthbyte(s,i+n+1)) == 0
+            if i<w && bloom_mask & _search_bloom_mask(_nthbyte(s,i+n+1)) == 0
                 bloomskips += 1
                 i += n
-            else
-                i += skip
             end
         else
             bloomtests += 1
