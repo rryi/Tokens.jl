@@ -1,4 +1,4 @@
-# include("C:\\Users\\RR\\.julia\\dev\\Tokens\\test\\testsearch.jl")
+# include("C:\\Users\\RR\\.julia\\dev\\Tokens\\test\\testsearch4.jl")
 
 #=
 Ergebnis:
@@ -17,7 +17,7 @@ Das macht das Laufzeitverhalten von v1 noch mysteriöser.
 # comparing _searchindex from base.search.jl with variants
 # Author Robert Rudolph www.r2c.de
 import Base.ByteArray, Base._nthbyte, Base._search_bloom_mask
-
+using Plots
 
 @enum StatsFields SFtime=1 SFloops SFbloomtests SFbloomskips SFbloombits
 
@@ -50,17 +50,23 @@ function Base.print(io::IO,s::Stats)
     end
 end
 
-const nullvec = zeros(Int,2)
+const nullmat = zeros(Int,2)
 
 function record(stats::Stats, f::Function, i::Int, sv::Vector)
-    vec = get(stats.dict,f,nullvec)
-    if vec===nullvec
-        vec = copy(get(stats.dict,zeros,nullvec))
-        push!(stats.dict,f=>vec)
+    mat = get(stats.dict,f,nullmat)
+    if mat===nullmat
+        mat = copy(get(stats.dict,zeros,nullmat))
+        push!(stats.dict,f=>mat)
     end
-    vec[i,:] = sv
+    mat[i,:] = sv
 end
 
+
+"return stats series for function and field"
+function line(stats::Stats,f::Function, field::StatsFields)
+    m = get(stats.dict,f,nullmat)
+    m[Int(field),:]
+end
 
 function _searchindex(s::String, t::String, i::Integer)
     # Check for fast case of a single byte
@@ -138,6 +144,93 @@ function _searchindex_julia(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     sv[Int(SFbloombits)] = bitcount(bloom_mask)
     0
 end
+
+
+
+# skip-optimized julia version
+function _searchindex_v1(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
+    n = sizeof(t)
+    m = sizeof(s)
+
+    if n == 0
+        return 1 <= i <= m+1 ? max(1, i) : 0
+    elseif m == 0
+        return 0
+    elseif n == 1
+        return something(findnext(isequal(_nthbyte(t,1)), s, i), 0)
+    end
+
+    w = m - n
+    if w < 0 || i - 1 > w
+        return 0
+    end
+
+    skip = n - 1
+    tlast = _nthbyte(t,n)
+    bloom_mask = UInt64(_search_bloom_mask(tlast))
+    for j in 1:n-1
+        bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
+        if _nthbyte(t,j) == tlast
+            skip = n - j - 1
+        end
+    end
+    loops = 0
+    bloomtests = 0
+    bloomskips = 0
+    i -= 1
+    while i < w
+        loops += 1
+        if _nthbyte(s,i+n) == tlast
+            # check candidate
+            j = 0
+            while j < n - 1
+                if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
+                    break
+                end
+                j += 1
+            end
+
+            # match found
+            if j == n - 1
+                return i+1 # no stats update
+            end
+
+            # no match: skip and test bloom
+            i += skip
+            bloomtests += 1
+            if i<w && bloom_mask & _search_bloom_mask(_nthbyte(s,i+n+1)) == 0
+                bloomskips += 1
+                i += n
+            end
+        else
+            bloomtests += 1
+            if bloom_mask & _search_bloom_mask(_nthbyte(s,i+n+1)) == 0
+                bloomskips += 1
+                i += n
+            end
+        end
+        i += 1
+    end
+    if i==w
+        # test end match
+        j = 1
+        while j < n
+            if _nthbyte(s,i+j) != _nthbyte(t,j)
+                break # not found
+            end
+            j += 1
+        end
+        if j == n
+            return i+1
+        end # match at the very end
+    end
+    sv[Int(SFloops)] = loops
+    sv[Int(SFbloomtests)] = bloomtests
+    sv[Int(SFbloomskips)] = bloomskips
+    sv[Int(SFbloombits)] = bitcount(bloom_mask)
+    0
+end
+
 
 
 "loop-optimized version"
@@ -225,11 +318,10 @@ function _searchindex_v1(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
 end
 
 
-# skip-optimized julia version
+# skip-optimized, check für found
 function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     n = sizeof(t)
     m = sizeof(s)
-
     if n == 0
         return 1 <= i <= m+1 ? max(1, i) : 0
     elseif m == 0
@@ -237,12 +329,10 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     elseif n == 1
         return something(findnext(isequal(_nthbyte(t,1)), s, i), 0)
     end
-
     w = m - n
     if w < 0 || i - 1 > w
         return 0
     end
-
     skip = n - 1
     tlast = _nthbyte(t,n)
     bloom_mask = UInt64(_search_bloom_mask(tlast))
@@ -255,6 +345,7 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     loops = 0
     bloomtests = 0
     bloomskips = 0
+
     i -= 1
     while i < w
         loops += 1
@@ -266,11 +357,10 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
                     break
                 end
                 j += 1
-            end
-
-            # match found
-            if j == n - 1
-                return i+1 # no stats update
+                # match found
+                if j == n - 1
+                    return i+1 # no stats update
+                end
             end
 
             # no match: skip and test bloom
@@ -434,6 +524,13 @@ function benchmark(alphabetsize::Int , patternsize::Int, textsize::Int, statsfil
         print(io,stats)
         close(io)
     end
+
+    # plot
+    julia = line(stats,_searchindex_julia,SFtime)
+    v1 = line(stats,_searchindex_v1,SFtime)
+    pp =plot(julia, label=string(_searchindex_julia))
+    plot!(v1, label=string(_searchindex_v1))
+    display(pp)
 end
 
-benchmark(128,3,100,"")
+#benchmark(128,3,100,"")
