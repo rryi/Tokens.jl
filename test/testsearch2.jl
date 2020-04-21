@@ -125,10 +125,8 @@ function _searchindex_julia(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     0
 end
 
-"""
-variant: bloomfilter without last byte of pattern, apply
-filter on tested byte (instead following byte)
-"""
+
+"loop-optimized version"
 function _searchindex_v1(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     n = sizeof(t)
     m = sizeof(s)
@@ -146,59 +144,70 @@ function _searchindex_v1(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
         return 0
     end
 
-    bloom_mask = UInt64(0)
-    skip = n # -1 removed because unconditional i +=1 at end of main loop removed
     tlast = _nthbyte(t,n)
-    for j in 1:n-1 # n-1: exclude last byte of pattern from bloom filter
+    bloom_mask =  _search_bloom_mask(tlast)
+    skip = n
+    for j in 1:n-1
         bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
         if _nthbyte(t,j) == tlast
-            skip = n - j # -1 removed because unconditional i +=1 at end of main loop removed
+            skip = n - j
         end
     end
-
     loops = 0
     bloomtests = 0
     bloomskips = 0
     i -= 1
-    while i <= w
+    while i < w
         loops += 1
-        silast =  _nthbyte(s,i+n)
-        if silast == tlast
+        if _nthbyte(s,i+n) == tlast
             # check candidate
-            j = 0
-            while j < n - 1
-                if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
+            j = 1
+            while j < n
+                if _nthbyte(s,i+j) != _nthbyte(t,j)
                     break
                 end
                 j += 1
+                # match found?
+                if j == n
+                    return i+1 # no stats update
+                end
             end
-
-            # match found
-            if j == n - 1
-                return i+1
+            # no match, try to rule out the next character
+            if bloom_mask & _search_bloom_mask(_nthbyte(s,i+n+1)) == 0
+                bloomskips += 1
+                i += n+1
+            else
+                i += skip
             end
-
-            # no match, use skip distance
-            # original code does bloom test assuming skip==1 here
-            # better postpone that to next ineration
-            i += skip
-        elseif bloom_mask & _search_bloom_mask(silast) == 0
+        else
+            i += 1 # due to byte mismatch
             bloomtests += 1
-            bloomskips += 1
-            i += n
-        else # worst case: minimal skip
-            bloomtests += 1
-            i += 1
+            if bloom_mask & _search_bloom_mask(_nthbyte(s,i+n)) == 0
+                bloomskips += 1
+                i += n
+            end
         end
     end
+    if i==w
+        # test end match
+        j = 1
+        while j < n
+            if _nthbyte(s,i+j) != _nthbyte(t,j)
+                break # not found
+            end
+            j += 1
+        end
+        if j == n
+            return i+1
+        end # match at the very end
+    end
+
     sv[Int(SFloops)] = loops
     sv[Int(SFbloomtests)] = bloomtests
     sv[Int(SFbloomskips)] = bloomskips
     sv[Int(SFbloombits)] = bitcount(bloom_mask)
     0
 end
-
-
 
 """
 variant: test bloomfilter first
@@ -268,7 +277,7 @@ function _searchindex_v2(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     0
 end
 
-const optimal_bloom_size = 160 # best guess: max of p(not in bloom)*size(bloom
+const optimal_bloom_bits = 55 # empirical best guess: 12.5% chance to skip
 
 """
 variant: like v2 but avoid bloom filter degeneration on large pattern sizes
@@ -296,16 +305,18 @@ function _searchindex_v3(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
     tlast = _nthbyte(t,n)
     bloom_mask = UInt64(_search_bloom_mask(tlast))
     bloom_size = 1
-    clearbits = 63 # no of clear bits in bloom
+    bloom_bits = 1 # no of set bits in bloom_mask
     j = n
-    while (j-=1)>=1 # n-1: last byte of pattern is already in bloom filter
-        # if (clearbits-1)*(bloom_size+1)>clearbits*bloom_size
-        if clearbits>=bloom_size # slightly weakened
-            b = _nthbyte(t,j)&63
-            hash =  (1%UInt64)<<b
-            clearbits -= (hash& ~bloom_mask)>>> (b)
-            bloom_mask |= hash
+    while (j-=1)>=1 # start with n-1: last byte of pattern is already in bloom filter
+        if bloom_bits <= optimal_bloom_bits
+            hash = _search_bloom_mask(_nthbyte(t,j))
             bloom_size += 1
+            if bloom_mask & hash == 0
+                bloom_bits += 1
+                if bloom_bits <= optimal_bloom_bits
+                    bloom_mask |= hash
+                end
+            end
         end
         if _nthbyte(t,j) == tlast && skip>n-j
             skip = n - j # -1 removed because unconditional i +=1 at end of main loop removed
@@ -355,296 +366,6 @@ function _searchindex_v3(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
 end
 
 
-"""
-variant: like v3 but 2 bloom filter
-"""
-function _searchindex_v4(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
-    n = sizeof(t)
-    m = sizeof(s)
-
-    if n == 0
-        return 1 <= i <= m+1 ? max(1, i) : 0
-    elseif m == 0
-        return 0
-    elseif n == 1
-        return something(findnext(isequal(_nthbyte(t,1)), s, i), 0)
-    end
-
-    w = m - n
-    if w < 0 || i - 1 > w
-        return 0
-    end
-
-    skip = n # -1 removed because unconditional i +=1 at end of main loop removed
-    tlast = _nthbyte(t,n)
-    bloom_mask = UInt64(_search_bloom_mask(tlast))
-    bloom_half = UInt64(_search_bloom_mask(tlast))
-    bloom_size = 1
-    for j in 1:n-1 # n-1: last byte of pattern is already in bloom filter
-        bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
-        if (j>n/2)
-            bloom_half |= _search_bloom_mask(_nthbyte(t,j))
-            bloom_size += 1
-        end
-        if _nthbyte(t,j) == tlast
-            skip = n - j # -1 removed because unconditional i +=1 at end of main loop removed
-        end
-    end
-
-    loops = 0
-    bloomtests = 0
-    bloomskips = 0
-    i -= 1
-    while i <= w
-        loops += 1
-        silast =  _nthbyte(s,i+n)
-        hash = _search_bloom_mask(silast)
-        bloomtests += 1
-        if bloom_mask & hash == 0
-            i += bloom_size
-            bloomskips += 1
-        elseif silast == tlast
-            # check candidate
-            j = 0
-            while j < n - 1
-                if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
-                    break
-                end
-                j += 1
-            end
-
-            # match found
-            if j == n - 1
-                return i+1
-            end
-
-            # no match, use skip distance
-            # original code does bloom test assuming skip==1 here
-            # better postpone that to next ineration
-            i += skip
-        else # worst case: minimal skip, but try half bloom
-            i += 1
-            bloomtests += 1
-            if bloom_half & hash == 0
-                i +=bloom_size-1
-                bloomskips += 1
-            end
-        end
-    end
-    sv[Int(SFloops)] = loops
-    sv[Int(SFbloomtests)] = bloomtests
-    sv[Int(SFbloomskips)] = bloomskips
-    sv[Int(SFbloombits)] = bitcount(bloom_mask)
-    0
-end
-
-
-
-
-"""
-brute force search without larger skips
-"""
-function _searchindex_v0(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
-    n = sizeof(t)
-    m = sizeof(s)
-
-    if n == 0
-        return 1 <= i <= m+1 ? max(1, i) : 0
-    elseif m == 0
-        return 0
-    elseif n == 1
-        return something(findnext(isequal(_nthbyte(t,1)), s, i), 0)
-    end
-
-    w = m - n
-    if w < 0 || i - 1 > w
-        return 0
-    end
-
-    tlast = _nthbyte(t,n)
-    loops = 0
-    bloomtests = 0
-    bloomskips = 0
-    i -= 1
-    while i <= w
-        loops += 1
-        if _nthbyte(s,i+n) == tlast
-            # check candidate
-            j = 0
-            while j < n - 1
-                if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
-                    break
-                end
-                j += 1
-            end
-            # match found
-            if j == n - 1
-                return i+1
-            end
-        end
-        i += 1
-    end
-    sv[Int(SFloops)] = loops
-    #sv[Int(SFbloomtests)] = bloomtests
-    #sv[Int(SFbloomskips)] = bloomskips
-    #sv[Int(SFbloombits)] = bitcount(bloom_mask)
-    0
-end
-
-
-
-
-"""
-variant: try to optimize v2
-"""
-function _searchindex_v5(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
-    n = sizeof(t)
-    m = sizeof(s)
-
-    if n == 0
-        return 1 <= i <= m+1 ? max(1, i) : 0
-    elseif m == 0
-        return 0
-    elseif n == 1
-        return something(findnext(isequal(_nthbyte(t,1)), s, i), 0)
-    end
-
-    w = m - n
-    if w < 0 || i - 1 > w
-        return 0
-    end
-
-    skip = n # -1 removed because unconditional i +=1 at end of main loop removed
-    tlast = _nthbyte(t,n)
-    bloom_mask = UInt64(_search_bloom_mask(tlast))
-    for j in 1:n-1 # n-1: last byte of pattern is already in bloom filter
-        bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
-        if _nthbyte(t,j) == tlast
-            skip = n - j # -1 removed because unconditional i +=1 at end of main loop removed
-        end
-    end
-    loops = 0
-    bloomtests = 0
-    bloomskips = 0
-    i -= 1
-    while i <= w
-        loops += 1
-        silast =  _nthbyte(s,i+n)
-        bloomtests += 1
-        if bloom_mask & _search_bloom_mask(silast) == 0
-            bloomskips += 1
-            i += n
-            continue
-        end
-        if silast == tlast
-            # check candidate
-            j = 0
-            while j < n - 1
-                if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
-                    break
-                end
-                j += 1
-                # match found?
-                if j == n - 1
-                    return i+1
-                end
-            end
-            # no match, use skip distance
-            # original code does bloom test assuming skip==1 here
-            # better postpone that to next ineration
-            i += skip
-            continue
-        end
-        i += 1
-    end
-    sv[Int(SFloops)] = loops
-    sv[Int(SFbloomtests)] = bloomtests
-    sv[Int(SFbloomskips)] = bloomskips
-    sv[Int(SFbloombits)] = bitcount(bloom_mask)
-    0
-end
-
-
-
-"""
-v6: julia variant, optimized main loop (1 compare less)
-"""
-function _searchindex_v6(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
-    n = sizeof(t)
-    m = sizeof(s)
-
-    if n == 0
-        return 1 <= i <= m+1 ? max(1, i) : 0
-    elseif m == 0
-        return 0
-    elseif n == 1
-        return something(findnext(isequal(_nthbyte(t,1)), s, i), 0)
-    end
-
-    w = m - n
-    if w < 0 || i - 1 > w
-        return 0
-    end
-
-    skip = n # -1 removed because unconditional i +=1 at end of main loop removed
-    tlast = _nthbyte(t,n)
-    bloom_mask = UInt64(_search_bloom_mask(tlast))
-    for j in 1:n-1 # n-1: last byte of pattern is already in bloom filter
-        bloom_mask |= _search_bloom_mask(_nthbyte(t,j))
-        if _nthbyte(t,j) == tlast
-            skip = n - j # -1 removed because unconditional i +=1 at end of main loop removed
-        end
-    end
-    loops = 0
-    bloomtests = 0
-    bloomskips = 0
-    i -= 1
-    while i < w
-        loops += 1
-        if _nthbyte(s,i+n) != tlast
-            i += 1
-            bloomtests += 1
-            if bloom_mask & _search_bloom_mask(_nthbyte(s,i+n)) == 0
-                bloomskips += 1
-                i += n
-                continue
-            end
-        else
-            # check candidate
-            j = 0
-            while j < n - 1
-                if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
-                    break
-                end
-                j += 1
-                # match found?
-                if j == n - 1
-                    return i+1
-                end
-            end
-            # no match, use skip distance
-            i += skip
-        end
-    end
-    if i==w
-        # test end match
-        j = 0
-        while j < n
-            if _nthbyte(s,i+j+1) != _nthbyte(t,j+1)
-                break # not found
-            end
-            j += 1
-        end
-        if j == n
-            return i+1
-        end # match at the very end
-    end
-    sv[Int(SFloops)] = loops
-    sv[Int(SFbloomtests)] = bloomtests
-    sv[Int(SFbloomskips)] = bloomskips
-    sv[Int(SFbloombits)] = bitcount(bloom_mask)
-    0
-end
 
 function runbench(f::Function,s::ByteArray,t::ByteArray, stats::Stats)
     #print(string(f),": ")
@@ -669,12 +390,12 @@ function benchmark(alphabetsize::Int , patternsize::Int, textsize::Int, statsfil
         p1 = runbench(_searchindex_v1,s,tj,stats)
         p2 = runbench(_searchindex_v2,s,tj,stats)
         p3 = runbench(_searchindex_v3,s,tj,stats)
-        p4 = runbench(_searchindex_v4,s,tj,stats)
-        p5 = runbench(_searchindex_v5,s,tj,stats)
-        p5 = runbench(_searchindex_v6,s,tj,stats)
-        p5 = runbench(_searchindex_v0,s,tj,stats)
-        if p0!=p1 || p1!=p2 || p2!=p3 || p3!=p4
-            println("ERROR p0=$p0, p1=$p1, p2=$p2, p3=$p3, p4=$p4")
+#        p4 = runbench(_searchindex_v4,s,tj,stats)
+#        p5 = runbench(_searchindex_v5,s,tj,stats)
+#        p5 = runbench(_searchindex_v6,s,tj,stats)
+#        p5 = runbench(_searchindex_v0,s,tj,stats)
+        if p0!=p1 || p1!=p2 || p2!=p3
+            println("ERROR p0=$p0, p1=$p1, p2=$p2, p3=$p3")
         else
             #println("found at $p0")
         end
