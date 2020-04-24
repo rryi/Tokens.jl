@@ -65,7 +65,7 @@ end
 "return stats series for function and field"
 function line(stats::Stats,f::Function, field::StatsFields)
     m = get(stats.dict,f,nullmat)
-    m[Int(field),:]
+    m[:,Int(field)]
 end
 
 function _searchindex(s::String, t::String, i::Integer)
@@ -528,9 +528,12 @@ function benchmark(alphabetsize::Int , patternsize::Int, textsize::Int, statsfil
     # plot
     julia = line(stats,_searchindex_julia,SFtime)
     v1 = line(stats,_searchindex_v1,SFtime)
+
     pp =plot(julia, label=string(_searchindex_julia))
     plot!(v1, label=string(_searchindex_v1))
+    plot!(line(stats,_searchindex_v2,SFtime), label=string(_searchindex_v2))
+    plot!(line(stats,_searchindex_v3,SFtime), label=string(_searchindex_v3))
     display(pp)
 end
 
-#benchmark(128,3,100,"")
+#benchmark(128,3,100,"r:\\testfile.txt")

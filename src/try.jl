@@ -386,3 +386,13 @@ pp_array = [ParametricPoint(rand(), rand()) for i in 1:1000_000];
 
 
 @btime sumsqr_points(pp_array)
+
+
+function tryx()
+    s = rand(0x00:0x7f,100)
+    ss = string(s)
+    print(s)
+    s2 = String(s)
+    print(s)
+end
+tryx()

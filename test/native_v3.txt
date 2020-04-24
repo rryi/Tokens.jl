@@ -1,0 +1,1142 @@
+julia> @code_native _searchindex_v3(s,t,1,sf)
+        .text
+; Function _searchindex_v3 {
+; Location: _searchindex_v3.jl:3
+        pushq   %rbp
+        movq    %rsp, %rbp
+; Function sizeof; {
+; Location: array.jl:201
+        pushq   %r15
+        pushq   %r14
+        pushq   %r13
+        pushq   %r12
+        pushq   %rsi
+        pushq   %rdi
+        pushq   %rbx
+        subq    $72, %rsp
+        movq    8(%rdx), %r10
+;}
+; Location: _searchindex_v3.jl:4
+; Function sizeof; {
+; Location: array.jl:201
+        movq    8(%rcx), %r15
+;}
+; Location: _searchindex_v3.jl:5
+; Function ==; {
+; Location: promotion.jl:425
+        testq   %r10, %r10
+;}
+        je      L74
+; Location: _searchindex_v3.jl:7
+; Function ==; {
+; Location: promotion.jl:425
+        testq   %r15, %r15
+;}
+        je      L126
+; Location: _searchindex_v3.jl:9
+; Function ==; {
+; Location: promotion.jl:425
+        cmpq    $1, %r10
+;}
+        jne     L133
+; Location: _searchindex_v3.jl:10
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        movq    (%rdx), %rax
+;}}
+; Function findnext; {
+; Location: search.jl:25
+        movzbl  (%rax), %edx
+        subq    $32, %rsp
+        movabsq $_search, %rax
+        callq   *%rax
+        addq    $32, %rsp
+;}
+        jmp     L1223
+L74:
+        xorl    %eax, %eax
+; Location: _searchindex_v3.jl:6
+; Function <=; {
+; Location: int.jl:428
+        testq   %r8, %r8
+;}
+        jle     L1223
+        incq    %r15
+; Location: _searchindex_v3.jl:6
+        cmpq    %r8, %r15
+        jl      L1223
+; Function max; {
+; Location: promotion.jl:436
+        testq   %r8, %r8
+        movl    $1, %eax
+        cmovgq  %r8, %rax
+;}
+        leaq    -56(%rbp), %rsp
+        popq    %rbx
+        popq    %rdi
+        popq    %rsi
+        popq    %r12
+        popq    %r13
+        popq    %r14
+        popq    %r15
+        popq    %rbp
+        retq
+L126:
+        xorl    %eax, %eax
+        jmp     L1223
+; Location: _searchindex_v3.jl:12
+; Function -; {
+; Location: int.jl:52
+L133:
+        movq    %r15, %rax
+;}
+; Location: _searchindex_v3.jl:13
+; Function -; {
+; Location: int.jl:52
+        decq    %r8
+;}
+; Location: _searchindex_v3.jl:12
+; Function -; {
+; Location: int.jl:52
+        subq    %r10, %rax
+;}
+; Location: _searchindex_v3.jl:13
+; Function <; {
+; Location: int.jl:49
+        movq    %rax, %rbx
+        movq    %rax, -72(%rbp)
+        shrq    $63, %rbx
+;}
+; Function >; {
+; Location: operators.jl:286
+; Function <; {
+; Location: int.jl:49
+        cmpq    %r8, %rax
+        setl    %al
+;}}
+; Function <; {
+; Location: int.jl:49
+        testq   %rbx, %rbx
+        setne   %bl
+;}
+        je      L169
+        movl    %ebx, %eax
+L169:
+        testb   %al, %al
+        je      L180
+        xorl    %eax, %eax
+        jmp     L1223
+; Location: _searchindex_v3.jl:18
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L180:
+        movq    (%rdx), %r11
+        movq    %rcx, -80(%rbp)
+        leaq    -1(%r10), %r13
+;}}
+; Location: _searchindex_v3.jl:19
+; Function _search_bloom_mask; {
+; Location: search.jl:144
+; Function <<; {
+; Location: int.jl:450
+; Function <<; {
+; Location: int.jl:443
+        movl    $1, %ecx
+        movq    %rdx, -88(%rbp)
+;}}}
+; Location: _searchindex_v3.jl:20
+        movq    %r9, -112(%rbp)
+; Function Colon; {
+; Location: range.jl:5
+; Function Type; {
+; Location: range.jl:255
+; Function unitrange_last; {
+; Location: range.jl:260
+; Function >=; {
+; Location: operators.jl:333
+; Function <=; {
+; Location: int.jl:428
+        testq   %r13, %r13
+;}}}}}
+; Location: _searchindex_v3.jl:18
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        movb    -1(%r11,%r10), %al
+;}}
+; Location: _searchindex_v3.jl:19
+; Function _search_bloom_mask; {
+; Location: search.jl:144
+; Function <<; {
+; Location: int.jl:450
+; Function <<; {
+; Location: int.jl:443
+        shlxq   %rax, %rcx, %r12
+        movq    %rax, -104(%rbp)
+;}}}
+; Location: _searchindex_v3.jl:20
+        jle     L367
+; Location: _searchindex_v3.jl:21
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        leaq    -2(%r10), %rbx
+        xorl    %ecx, %ecx
+        movl    $1, %r9d
+        movq    %r10, %r14
+        nopw    %cs:(%rax,%rax)
+L256:
+        movzbl  (%r11,%rcx), %eax
+        movq    %r12, %rsi
+        movq    %r14, %rdx
+;}}
+; Location: _searchindex_v3.jl:22
+        leaq    1(%rbx), %r14
+; Location: _searchindex_v3.jl:21
+; Function _search_bloom_mask; {
+; Location: search.jl:144
+; Function <<; {
+; Location: int.jl:450
+; Function <<; {
+; Location: int.jl:443
+        shlxq   %rax, %r9, %r12
+;}}}
+; Function |; {
+; Location: int.jl:320
+        orq     %rsi, %r12
+;}
+; Location: _searchindex_v3.jl:22
+; Function ==; {
+; Location: promotion.jl:425
+        cmpb    -104(%rbp), %al
+;}
+        cmovneq %rdx, %r14
+; Location: _searchindex_v3.jl:23
+; Function iterate; {
+; Location: range.jl:575
+; Function ==; {
+; Location: promotion.jl:425
+        testq   %rbx, %rbx
+;}}
+        je      L370
+; Location: _searchindex_v3.jl:21
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        incq    %rcx
+        decq    %rbx
+        cmpq    %rcx, %r10
+        ja      L256
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rax
+        incq    %rcx
+        movq    %rcx, (%rax)
+        subq    $32, %rsp
+        movq    -88(%rbp), %rcx
+        movabsq $jl_bounds_error_ints, %rbx
+        movl    $1, %r8d
+        movq    %rax, %rdx
+        callq   *%rbx
+        addq    $32, %rsp
+        ud2
+;}}}
+; Function _searchindex_v3 {
+; Location: array.jl
+L367:
+        movq    %r10, %r14
+L370:
+        movq    -72(%rbp), %rax
+;}
+; Function _searchindex_v3 {
+; Location: _searchindex_v3.jl:30
+; Function <; {
+; Location: int.jl:49
+        cmpq    %rax, %r8
+;}
+        jge     L697
+        movq    -80(%rbp), %rax
+        movq    (%rax), %rax
+; Location: _searchindex_v3.jl:20
+; Function Colon; {
+; Location: range.jl:5
+; Function Type; {
+; Location: range.jl:255
+; Function unitrange_last; {
+; Location: range.jl:260
+; Function >=; {
+; Location: operators.jl:333
+; Function <=; {
+; Location: int.jl:428
+        movq    %rax, -96(%rbp)
+        xorl    %eax, %eax
+        testq   %r13, %r13
+;}}}}}
+; Location: _searchindex_v3.jl:30
+        jle     L861
+        movq    %rax, -64(%rbp)
+        movq    -72(%rbp), %rax
+        xorl    %r9d, %r9d
+        xorl    %esi, %esi
+        nopw    %cs:(%rax,%rax)
+; Location: _searchindex_v3.jl:32
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L432:
+        leaq    -1(%r8,%r10), %rcx
+        movq    %r13, %rdi
+;}}
+; Function +; {
+; Location: int.jl:53
+        leaq    (%r8,%r10), %rbx
+;}
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        cmpq    %r15, %rcx
+        jae     L1369
+;}}
+; Function ==; {
+; Location: promotion.jl:425
+        movq    -104(%rbp), %rdx
+        movq    -96(%rbp), %r13
+        cmpb    %dl, (%r13,%rcx)
+        movq    %r13, %rcx
+;}
+        jne     L608
+        movq    %r9, -120(%rbp)
+        movq    -64(%rbp), %r9
+; Location: _searchindex_v3.jl:35
+        leaq    (%rcx,%r8), %rcx
+        xorl    %ebx, %ebx
+        movq    %rdi, %r13
+        nopl    (%rax)
+; Location: _searchindex_v3.jl:36
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L496:
+        leaq    (%r8,%rbx), %rdx
+        cmpq    %r15, %rdx
+        jae     L1240
+        cmpq    %r10, %rbx
+        jae     L1304
+        movzbl  (%rcx,%rbx), %edx
+;}}
+; Function !=; {
+; Location: operators.jl:185
+; Function ==; {
+; Location: promotion.jl:425
+        cmpb    (%r11,%rbx), %dl
+;}}
+        jne     L536
+; Location: _searchindex_v3.jl:39
+; Function +; {
+; Location: int.jl:53
+        incq    %rbx
+;}
+; Location: _searchindex_v3.jl:35
+; Function <; {
+; Location: int.jl:49
+        cmpq    %r13, %rbx
+;}
+        jl      L496
+; Location: _searchindex_v3.jl:43
+; Function ==; {
+; Location: promotion.jl:425
+L536:
+        cmpq    %r13, %rbx
+;}
+        je      L1073
+; Location: _searchindex_v3.jl:48
+; Function +; {
+; Location: int.jl:53
+        addq    %r14, %r8
+;}
+; Location: _searchindex_v3.jl:50
+; Function <; {
+; Location: int.jl:49
+        cmpq    %rax, %r8
+;}
+        jge     L650
+        movq    -96(%rbp), %rdx
+; Location: _searchindex_v3.jl:50
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        leaq    -1(%r8,%r10), %rcx
+        cmpq    %r15, %rcx
+        jae     L1619
+;}}
+; Function ==; {
+; Location: int.jl:432
+; Function ==; {
+; Location: promotion.jl:425
+        movzbl  (%rdx,%rcx), %ecx
+        xorl    %edx, %edx
+        btq     %rcx, %r12
+;}}
+        movl    $0, %ecx
+; Function ==; {
+; Location: int.jl:432
+; Function ==; {
+; Location: promotion.jl:425
+        setae   %dl
+;}}
+        cmovaeq %r10, %rcx
+        addq    %rdx, %r9
+        movq    %r9, -64(%rbp)
+        jmp     L652
+        nopw    (%rax,%rax)
+; Location: _searchindex_v3.jl:55
+; Function +; {
+; Location: int.jl:53
+L608:
+        incq    %r8
+;}
+; Location: _searchindex_v3.jl:57
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        cmpq    %r15, %rbx
+        movq    %rdi, %r13
+        jae     L1428
+;}}
+; Function ==; {
+; Location: int.jl:432
+; Function ==; {
+; Location: promotion.jl:425
+        movzbl  (%rcx,%rbx), %ecx
+;}}
+; Location: _searchindex_v3.jl:56
+; Function +; {
+; Location: int.jl:53
+        incq    %r9
+;}
+; Location: _searchindex_v3.jl:57
+; Function ==; {
+; Location: int.jl:432
+; Function ==; {
+; Location: promotion.jl:425
+        btq     %rcx, %r12
+;}}
+        jae     L676
+; Location: _searchindex_v3.jl:31
+; Function +; {
+; Location: int.jl:53
+        incq    %rsi
+;}
+; Location: _searchindex_v3.jl:30
+; Function <; {
+; Location: int.jl:49
+        cmpq    %rax, %r8
+;}
+        jl      L432
+        jmp     L708
+L650:
+        xorl    %ecx, %ecx
+L652:
+        movq    -120(%rbp), %r9
+; Location: _searchindex_v3.jl:50
+        addq    %rcx, %r8
+; Location: _searchindex_v3.jl:49
+; Function +; {
+; Location: int.jl:53
+        incq    %r9
+;}
+; Location: _searchindex_v3.jl:31
+; Function +; {
+; Location: int.jl:53
+        incq    %rsi
+;}
+; Location: _searchindex_v3.jl:30
+; Function <; {
+; Location: int.jl:49
+        cmpq    %rax, %r8
+;}
+        jl      L432
+        jmp     L708
+; Location: _searchindex_v3.jl:58
+; Function +; {
+; Location: int.jl:53
+L676:
+        incq    -64(%rbp)
+;}
+; Location: _searchindex_v3.jl:59
+; Function +; {
+; Location: int.jl:53
+        addq    %r10, %r8
+;}
+; Location: _searchindex_v3.jl:31
+; Function +; {
+; Location: int.jl:53
+        incq    %rsi
+;}
+; Location: _searchindex_v3.jl:30
+; Function <; {
+; Location: int.jl:49
+        cmpq    %rax, %r8
+;}
+        jl      L432
+        jmp     L708
+L697:
+        xorl    %ecx, %ecx
+        xorl    %esi, %esi
+        xorl    %r9d, %r9d
+        movq    %rcx, -64(%rbp)
+L708:
+        movq    -112(%rbp), %r13
+        movq    -64(%rbp), %rdx
+; Location: _searchindex_v3.jl:63
+; Function ==; {
+; Location: promotion.jl:425
+        cmpq    %rax, %r8
+;}
+        jne     L1118
+        movq    %rdx, %r8
+; Location: _searchindex_v3.jl:66
+; Function <; {
+; Location: int.jl:49
+        cmpq    $2, %r10
+;}
+        jl      L824
+        movq    -80(%rbp), %rcx
+        xorl    %ebx, %ebx
+        movq    (%rcx), %rdi
+; Location: _searchindex_v3.jl:66
+        addq    %rax, %rdi
+        nopw    (%rax,%rax)
+; Location: _searchindex_v3.jl:67
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L752:
+        leaq    (%rax,%rbx), %rdx
+        cmpq    %r15, %rdx
+        jae     L1490
+        cmpq    %r10, %rbx
+        jae     L1554
+        movzbl  (%rdi,%rbx), %eax
+;}}
+; Function !=; {
+; Location: operators.jl:185
+; Function ==; {
+; Location: promotion.jl:425
+        cmpb    (%r11,%rbx), %al
+;}}
+        jne     L1096
+        movq    -72(%rbp), %rax
+; Location: _searchindex_v3.jl:66
+; Function <; {
+; Location: int.jl:49
+        leaq    1(%rbx), %rdx
+        addq    $2, %rbx
+        cmpq    %r10, %rbx
+        movq    %rdx, %rbx
+;}
+        jl      L752
+; Location: _searchindex_v3.jl:72
+; Function ==; {
+; Location: promotion.jl:425
+        incq    %rdx
+        cmpq    %r10, %rdx
+        movq    %r8, %rdx
+;}
+        je      L841
+        jmp     L1118
+L824:
+        movl    $1, %edx
+; Location: _searchindex_v3.jl:72
+; Function ==; {
+; Location: promotion.jl:425
+        cmpq    %r10, %rdx
+        movq    %r8, %rdx
+;}
+        jne     L1118
+; Location: _searchindex_v3.jl:73
+; Function +; {
+; Location: int.jl:53
+L841:
+        incq    %rax
+;}
+        leaq    -56(%rbp), %rsp
+        popq    %rbx
+        popq    %rdi
+        popq    %rsi
+        popq    %r12
+        popq    %r13
+        popq    %r14
+        popq    %r15
+        popq    %rbp
+        retq
+L861:
+        movq    %rax, -64(%rbp)
+        movq    -72(%rbp), %rax
+        movq    -96(%rbp), %rdi
+        xorl    %r9d, %r9d
+        xorl    %esi, %esi
+        nop
+; Location: _searchindex_v3.jl:32
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L880:
+        leaq    -1(%r8,%r10), %rcx
+;}}
+; Function +; {
+; Location: int.jl:53
+        leaq    (%r8,%r10), %rbx
+;}
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        cmpq    %r15, %rcx
+        jae     L1369
+;}}
+; Function ==; {
+; Location: promotion.jl:425
+        movq    -104(%rbp), %rdx
+        cmpb    %dl, (%rdi,%rcx)
+        movq    %rdi, %rdx
+;}
+        jne     L974
+; Location: _searchindex_v3.jl:43
+; Function ==; {
+; Location: promotion.jl:425
+        testq   %r13, %r13
+;}
+        je      L1073
+; Location: _searchindex_v3.jl:48
+; Function +; {
+; Location: int.jl:53
+        addq    %r14, %r8
+;}
+; Location: _searchindex_v3.jl:50
+; Function <; {
+; Location: int.jl:49
+        cmpq    %rax, %r8
+;}
+        jge     L1020
+        movq    -64(%rbp), %rbx
+; Location: _searchindex_v3.jl:50
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        leaq    -1(%r8,%r10), %rcx
+        cmpq    %r15, %rcx
+        jae     L1624
+;}}
+; Function ==; {
+; Location: int.jl:432
+; Function ==; {
+; Location: promotion.jl:425
+        movzbl  (%rdx,%rcx), %ecx
+        xorl    %edx, %edx
+        btq     %rcx, %r12
+;}}
+        movq    %r10, %rcx
+; Function ==; {
+; Location: int.jl:432
+; Function ==; {
+; Location: promotion.jl:425
+        setae   %dl
+;}}
+        jae     L965
+        xorl    %ecx, %ecx
+L965:
+        addq    %rdx, %rbx
+        movq    %rbx, -64(%rbp)
+        jmp     L1022
+; Location: _searchindex_v3.jl:55
+; Function +; {
+; Location: int.jl:53
+L974:
+        incq    %r8
+;}
+; Location: _searchindex_v3.jl:57
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        cmpq    %r15, %rbx
+        jae     L1428
+;}}
+; Function ==; {
+; Location: int.jl:432
+; Function ==; {
+; Location: promotion.jl:425
+        movzbl  (%rdx,%rbx), %eax
+;}}
+; Location: _searchindex_v3.jl:56
+; Function +; {
+; Location: int.jl:53
+        incq    %r9
+;}
+; Location: _searchindex_v3.jl:57
+; Function ==; {
+; Location: int.jl:432
+; Function ==; {
+; Location: promotion.jl:425
+        btq     %rax, %r12
+;}}
+        jae     L1045
+        movq    -72(%rbp), %rax
+; Location: _searchindex_v3.jl:31
+; Function +; {
+; Location: int.jl:53
+        incq    %rsi
+;}
+; Location: _searchindex_v3.jl:30
+; Function <; {
+; Location: int.jl:49
+        cmpq    %rax, %r8
+;}
+        jl      L880
+        jmp     L708
+L1020:
+        xorl    %ecx, %ecx
+; Location: _searchindex_v3.jl:49
+; Function +; {
+; Location: int.jl:53
+L1022:
+        incq    %r9
+;}
+; Location: _searchindex_v3.jl:50
+        addq    %rcx, %r8
+; Location: _searchindex_v3.jl:31
+; Function +; {
+; Location: int.jl:53
+        incq    %rsi
+;}
+; Location: _searchindex_v3.jl:30
+; Function <; {
+; Location: int.jl:49
+        cmpq    %rax, %r8
+;}
+        jl      L880
+        jmp     L708
+L1045:
+        movq    -72(%rbp), %rax
+; Location: _searchindex_v3.jl:58
+; Function +; {
+; Location: int.jl:53
+        incq    -64(%rbp)
+;}
+; Location: _searchindex_v3.jl:59
+; Function +; {
+; Location: int.jl:53
+        addq    %r10, %r8
+;}
+; Location: _searchindex_v3.jl:31
+; Function +; {
+; Location: int.jl:53
+        incq    %rsi
+;}
+; Location: _searchindex_v3.jl:30
+; Function <; {
+; Location: int.jl:49
+        cmpq    %rax, %r8
+;}
+        jl      L880
+        jmp     L708
+; Location: _searchindex_v3.jl:44
+; Function +; {
+; Location: int.jl:53
+L1073:
+        incq    %r8
+;}
+        movq    %r8, %rax
+        leaq    -56(%rbp), %rsp
+        popq    %rbx
+        popq    %rdi
+        popq    %rsi
+        popq    %r12
+        popq    %r13
+        popq    %r14
+        popq    %r15
+        popq    %rbp
+        retq
+L1096:
+        movq    -72(%rbp), %rax
+; Location: _searchindex_v3.jl:67
+        incq    %rbx
+        movq    %rbx, %rdx
+; Location: _searchindex_v3.jl:72
+; Function ==; {
+; Location: promotion.jl:425
+        cmpq    %r10, %rdx
+        movq    %r8, %rdx
+;}
+        je      L841
+; Location: _searchindex_v3.jl:76
+; Function setindex!; {
+; Location: array.jl:769
+L1118:
+        movq    8(%r13), %rax
+        cmpq    $1, %rax
+        jbe     L1686
+        movq    (%r13), %rcx
+;}
+; Location: _searchindex_v3.jl:77
+; Function setindex!; {
+; Location: array.jl:769
+        cmpq    $2, %rax
+;}
+; Location: _searchindex_v3.jl:76
+; Function setindex!; {
+; Location: array.jl:769
+        movq    %rsi, 8(%rcx)
+;}
+; Location: _searchindex_v3.jl:77
+; Function setindex!; {
+; Location: array.jl:769
+        je      L1748
+;}
+; Location: _searchindex_v3.jl:78
+; Function setindex!; {
+; Location: array.jl:769
+        cmpq    $3, %rax
+;}
+; Location: _searchindex_v3.jl:77
+; Function setindex!; {
+; Location: array.jl:769
+        movq    %r9, 16(%rcx)
+;}
+; Location: _searchindex_v3.jl:78
+; Function setindex!; {
+; Location: array.jl:769
+        jbe     L1810
+        movq    %rdx, 24(%rcx)
+        xorl    %r8d, %r8d
+        nopw    %cs:(%rax,%rax)
+;}
+; Location: _searchindex_v3.jl:79
+; Function bitcount; {
+; Location: testsearch.jl:27
+; Function &; {
+; Location: int.jl:297
+L1184:
+        movl    %r12d, %edx
+        andl    $1, %edx
+;}
+; Function +; {
+; Location: int.jl:53
+        addq    %rdx, %r8
+;}}
+; Function bitcount; {
+; Location: int.jl:444
+        shrq    %r12
+;}}
+; Function _searchindex_v3 {
+; Location: testsearch.jl:26
+        jne     L1184
+;}
+; Function _searchindex_v3 {
+; Location: _searchindex_v3.jl:79
+; Function setindex!; {
+; Location: array.jl:769
+; Function convert; {
+; Location: number.jl:7
+; Function Type; {
+; Location: boot.jl:717
+; Function toInt64; {
+; Location: boot.jl:642
+; Function check_top_bit; {
+; Location: boot.jl:581
+; Function is_top_bit_set; {
+; Location: boot.jl:571
+        testq   %r8, %r8
+;}
+        js      L1872
+;}}}}
+        cmpq    $4, %rax
+        jbe     L1906
+        movq    %r8, 32(%rcx)
+        xorl    %eax, %eax
+;}
+; Location: _searchindex_v3.jl:6
+L1223:
+        leaq    -56(%rbp), %rsp
+        popq    %rbx
+        popq    %rdi
+        popq    %rsi
+        popq    %r12
+        popq    %r13
+        popq    %r14
+        popq    %r15
+        popq    %rbp
+        retq
+; Location: _searchindex_v3.jl:36
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L1240:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+;}}
+; Function +; {
+; Location: operators.jl:502
+; Function +; {
+; Location: int.jl:53
+        leaq    1(%r8,%rbx), %rcx
+;}}
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rdx
+        movq    %rcx, (%rdx)
+        subq    $32, %rsp
+        movq    -80(%rbp), %rcx
+        movabsq $jl_bounds_error_ints, %rax
+        movl    $1, %r8d
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+L1304:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        incq    %rbx
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rax
+        movq    %rbx, (%rax)
+        subq    $32, %rsp
+        movq    -88(%rbp), %rcx
+        movabsq $jl_bounds_error_ints, %rbx
+        movl    $1, %r8d
+        movq    %rax, %rdx
+        callq   *%rbx
+        addq    $32, %rsp
+        ud2
+;}}
+; Location: _searchindex_v3.jl:32
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L1369:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rdx
+        movq    %rbx, (%rdx)
+        subq    $32, %rsp
+        movq    -80(%rbp), %rcx
+        movabsq $jl_bounds_error_ints, %rax
+        movl    $1, %r8d
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+;}}
+; Location: _searchindex_v3.jl:57
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L1428:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+;}}
+; Function +; {
+; Location: int.jl:53
+        addq    %r10, %r8
+;}
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rdx
+        movq    %r8, (%rdx)
+        subq    $32, %rsp
+        movq    -80(%rbp), %rcx
+        movabsq $jl_bounds_error_ints, %rax
+        movl    $1, %r8d
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+;}}
+; Location: _searchindex_v3.jl:67
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L1490:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        callq   *%r11
+        subq    %rax, %rsp
+        incq    %r15
+        movq    %rsp, %rdx
+        subq    %r10, %r15
+        addq    %rbx, %r15
+        movq    %r15, (%rdx)
+        subq    $32, %rsp
+        movabsq $jl_bounds_error_ints, %rax
+        movl    $1, %r8d
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+L1554:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rax
+        incq    %rbx
+        movq    %rbx, (%rax)
+        subq    $32, %rsp
+        movq    -88(%rbp), %rcx
+        movabsq $jl_bounds_error_ints, %rbx
+        movl    $1, %r8d
+        movq    %rax, %rdx
+        callq   *%rbx
+        addq    $32, %rsp
+        ud2
+;}}}
+; Function _searchindex_v3 {
+; Location: array.jl
+L1619:
+        addq    %r10, %r8
+        jmp     L1627
+L1624:
+        addq    %r10, %r8
+;}
+; Function _searchindex_v3 {
+; Location: _searchindex_v3.jl:50
+; Function _nthbyte; {
+; Location: search.jl:148
+; Function getindex; {
+; Location: array.jl:731
+L1627:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rdx
+        movq    %r8, (%rdx)
+        subq    $32, %rsp
+        movq    -80(%rbp), %rcx
+        movabsq $jl_bounds_error_ints, %rax
+        movl    $1, %r8d
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+;}}
+; Location: _searchindex_v3.jl:76
+; Function setindex!; {
+; Location: array.jl:769
+L1686:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rdx
+        movq    $2, (%rdx)
+        subq    $32, %rsp
+        movabsq $jl_bounds_error_ints, %rax
+        movl    $1, %r8d
+        movq    %r13, %rcx
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+;}
+; Location: _searchindex_v3.jl:77
+; Function setindex!; {
+; Location: array.jl:769
+L1748:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rdx
+        movq    $3, (%rdx)
+        subq    $32, %rsp
+        movabsq $jl_bounds_error_ints, %rax
+        movl    $1, %r8d
+        movq    %r13, %rcx
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+;}
+; Location: _searchindex_v3.jl:78
+; Function setindex!; {
+; Location: array.jl:769
+L1810:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rdx
+        movq    $4, (%rdx)
+        subq    $32, %rsp
+        movabsq $jl_bounds_error_ints, %rax
+        movl    $1, %r8d
+        movq    %r13, %rcx
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+;}
+; Location: _searchindex_v3.jl:79
+; Function setindex!; {
+; Location: array.jl:769
+; Function convert; {
+; Location: number.jl:7
+; Function Type; {
+; Location: boot.jl:717
+; Function toInt64; {
+; Location: boot.jl:642
+; Function check_top_bit; {
+; Location: boot.jl:581
+L1872:
+        subq    $32, %rsp
+        movabsq $throw_inexacterror, %rax
+        movl    $235753048, %ecx        # imm = 0xE0D4E58
+        movl    $243009744, %edx        # imm = 0xE7C08D0
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+        ud2
+;}}}}
+L1906:
+        movl    $16, %eax
+        movabsq $1902385104, %r11       # imm = 0x716417D0
+        callq   *%r11
+        subq    %rax, %rsp
+        movq    %rsp, %rdx
+        movq    $5, (%rdx)
+        subq    $32, %rsp
+        movabsq $jl_bounds_error_ints, %rax
+        movl    $1, %r8d
+        movq    %r13, %rcx
+        callq   *%rax
+        addq    $32, %rsp
+        ud2
+;}}
+
+julia> 
