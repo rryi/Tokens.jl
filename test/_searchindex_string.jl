@@ -17,25 +17,34 @@ function _searchindex_string(s::String, t::String, i::Integer,sv::Vector)
     end
 
     t_ptr = pointer(t)
-    t_end = t_ptr + n
-    t_last = t_end - 1
+    t_last = t_ptr + n - 1
     s_ptr = pointer(s)
-    s_end = s_ptr + m
-    s_last = s_end - 1
+    s_last = s_ptr + m - 1
     GC.@preserve s t begin
         skip = n
-        tlast = unsafe_load(s_last)
+        tlast = unsafe_load(t_last)
         bloom_mask = UInt64(_search_bloom_mask(tlast))
         bloom_size = 1 # number of bytes to skip if byte not in filter
         bloom_bits = 1 # number of bits set in bloom_mask (if <= 32)
         bloom_skip = 1 # no. of bytes to skip if byte not in filter
-        tj = t_last # t_last is already processed
-        while (tj-=1)>=t_ptr
-            if tj == tlast && skip = n
-                skip = t_last - tj
+        t_j = t_last # t_last is already processed
+        while (t_j-=1)>=t_ptr
+            tj = unsafe_load(t_j)
+            if tj == tlast && skip == n
+                skip = t_last - t_j
             end
-            if bloom_bits <= 32 # argument: is near max(p(bloom_skip)*bloom_skip)
-                hash = _search_bloom_mask(unsafe_load(tj))
+            if bloom_bits <= 32
+                # 32 bits in bloom filter is guess of max(expected skip per test)
+                # simplified argumentation:
+                # assume no hash collisions for pattern bytes.
+                # then we have bloom_bits==bloom_skip.
+                # assume uniform distribution of bytes to test. Then,
+                # p(byte in filter) == (64-bloom_bits)/64
+                # Expected skip is p(byte in filter)*bloom_skip
+                # writing b for bloom_skip(==bloom_bits) we have
+                # expectedSkip(b)= (64-b)/64*b
+                # expectedSkip has its maximum at 32.
+                hash = _search_bloom_mask(tj)
                 if hash&bloom_mask == 0
                     if bloom_bits < 32
                         # put in bloom filter up to 32 bits
@@ -44,7 +53,17 @@ function _searchindex_string(s::String, t::String, i::Integer,sv::Vector)
                     bloom_bits += 1 # gets >32 to terminate bloom filter filling
                 end
                 if bloom_bits <= 32
+                    # enlarge bloom_skip as long as all hashes are added to filter.
+                    # while bloom_bits<=32, all hashes were added to filter
+                    # or a hash collision happened (adding hash does not change filter)
                     bloom_skip += 1
+                else
+                    if skip<n
+                        # we have finished adding hashes to bloom filter
+                        # and we have determined the skip distance if matching last byte
+                        # nothimg remains to be done in preprocessing - stop work.
+                        break
+                    end
                 end
             end
         end
@@ -61,18 +80,18 @@ function _searchindex_string(s::String, t::String, i::Integer,sv::Vector)
                 silast = unsafe_load(si)
                 if bloom_mask & _search_bloom_mask(silast) == 0
                     if DOSTATS bloomskips += 1 end
-                    i += bloom_skip
+                    si += bloom_skip
                 elseif silast == tlast
                     # check candidate
                     j = n
-                    while (j-=1) > 0
+                    while (j-=1) > 0 # case j==0 is already tested (silast==tlast)
                         if unsafe_load(si-j) != unsafe_load(t_last-j)
                             break
                         end
                         # match found?
                         if j == 1
                             if DOSTATS sv[Int(SFloops)] = loops; sv[Int(SFbloomtests)] = bloomtests; sv[Int(SFbloomskips)] = bloomskips; sv[Int(SFbloombits)] = bitcount(bloom_mask) end
-                            return si-s_ptr-n+1
+                            return si-s_ptr-n+2 # si points to last byte of pattern
                         end
                     end
                     # no match: skip and test bloom
@@ -95,7 +114,7 @@ function _searchindex_string(s::String, t::String, i::Integer,sv::Vector)
                         # match found?
                         if j == 1
                             if DOSTATS sv[Int(SFloops)] = loops; sv[Int(SFbloomtests)] = bloomtests; sv[Int(SFbloomskips)] = bloomskips; sv[Int(SFbloombits)] = bitcount(bloom_mask) end
-                            return si-s_ptr-n+1
+                            return si-s_ptr-n+2
                         end
                     end
                     # no match: skip and test bloom
@@ -106,9 +125,10 @@ function _searchindex_string(s::String, t::String, i::Integer,sv::Vector)
                         si += bloom_skip
                     end
                 else
+                    # most frequent case
                     si += 1
                     if DOSTATS bloomtests += 1 end
-                    if bloom_mask & _search_bloom_mask((unsafe_load(si)) == 0
+                    if bloom_mask & _search_bloom_mask(unsafe_load(si)) == 0
                         if DOSTATS bloomskips += 1 end
                         si += bloom_skip
                     end
@@ -126,7 +146,7 @@ function _searchindex_string(s::String, t::String, i::Integer,sv::Vector)
                 # match found?
                 if j == 0
                     if DOSTATS sv[Int(SFloops)] = loops; sv[Int(SFbloomtests)] = bloomtests; sv[Int(SFbloomskips)] = bloomskips; sv[Int(SFbloombits)] = bitcount(bloom_mask) end
-                    return si-s_ptr-n+1
+                    return si-s_ptr-n+2
                 end
             end
         end

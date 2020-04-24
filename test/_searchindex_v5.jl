@@ -39,6 +39,13 @@ function _searchindex_v5(s::ByteArray, t::ByteArray, i::Integer,sv::Vector)
             if bloom_bits <= 32
                 bloom_skip += 1
             end
+        else
+            if skip<n
+                # we have finished adding hashes to bloom filter
+                # and we have determined the skip distance if matching last byte
+                # nothimg remains to be done in preprocessing - stop work.
+                break
+            end
         end
     end
     if DOSTATS loops = 0 end

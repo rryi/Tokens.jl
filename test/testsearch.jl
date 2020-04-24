@@ -87,7 +87,7 @@ include("_searchindex_v5.jl")
 include("_searchindex_string.jl")
 
 
-function runbench(f::Function,s::ByteArray,t::ByteArray, stats::Stats)
+function runbench(f::Function,s,t, stats::Stats)
     #print(string(f),": ")
     sf = zeros(Int,Int(typemax(StatsFields)))
     elapsedtime = time_ns()
