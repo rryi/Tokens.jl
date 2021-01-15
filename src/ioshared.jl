@@ -94,13 +94,13 @@ PRECOND: limit large enough, no share at ofs, no delete beyond io.writeofs
  if resize<0: ofs-resize <= io.writeofs
 
 """
-function _resize(io::IOShared, ofs:UInt32, resize:Int)
+function _resize(io::IOShared, ofs::UInt32, resize::Int)
     @boundscheck begin
-        io.shared <= ofs # never chance shared contents
+        (io.shared <= ofs # never chance shared contents
         && ofs <= io.writeofs # not beyond end of content
         && ofs <= io.writeofs + resize  # no delete beyond content (resize<0)
         && io.writeofs+resize <= io.limit # enough space (relevant if resize>0)
-        || boundserror(io,ofs, resize)
+        ) || boundserror(io,ofs, resize)
     end
     s = io.buffer
     GC.@preserve s begin
@@ -131,10 +131,11 @@ function realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
     flush(io)
     size = usize(io)%Int + resize
     @boundscheck begin
-        io.readofs <= ofs && ofs <= io.writeofs
+        (io.readofs <= ofs 
+        && ofs <= io.writeofs
         && size >= 0 && size <= typemax(UInt32)
         && (ofs-resize <= io.writeofs)
-        || boundserror(io,ofs,resize)
+        ) || boundserror(io,ofs,resize)
     end
     # new limit: several considerations.
     # (1) at least, it must be >= size
@@ -144,7 +145,7 @@ function realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
     while size > limit
         # enlarge
         limit <<= 1 # ensures consideration (3): double buffer sizes
-        limit == 0 && limit = typemax(UInt32) # handles overflow
+        limit == 0 && (limit = typemax(UInt32)) # handles overflow
     end
     buf = _string_n(limit)
     ptr = pointer(buf)
@@ -261,7 +262,7 @@ NOOP if IO is flushable or io <:IO{Nothing}
 """
 fill(io::IO,count::UInt32) = nothing
 
-function fill(io::IO{T}, count::UInt32) where T <: IO
+function fill(io::IOShared{T}, count::UInt32) where T <: IO
     io.flushable && return nothing
     avail = min(bytesavailable(io.io), typemax(UInt32)) % UInt32
     if count > avail
@@ -306,7 +307,7 @@ function locate(pool::IOShared,s::UInt8)
 end
 
 
-minihash(v:UInt8) = (1%UInt64)<<(v&63)
+minihash(v::UInt8) = (1%UInt64)<<(v&63)
 
 
 """
@@ -346,7 +347,7 @@ function locate(pool::IOShared,ofs::UInt32,size::UInt64,s::String)
         skip = size # skip if last byte matches, some other byte not
         j = size-1
         # build bloom mask and maximal skip
-        while j-=1 >= 0
+        while (j-=1) >= 0
             cs = unsafe_load(s_ptr+j)
             bloom |= minihash(cs)
             if cs==cs_last
@@ -365,7 +366,7 @@ function locate(pool::IOShared,ofs::UInt32,size::UInt64,s::String)
                 ## last byte matches. test successive backwards up to i-size+1
                 j = size-1
                 p0 = p_ptr+i-j # pointer to offset 0 in current match
-                while j-=1 >= 0
+                while (j-=1) >= 0
                     if unsafe_load(p0+j) != unsafe_load(s_ptr+j)
                         break
                     end
@@ -379,7 +380,7 @@ function locate(pool::IOShared,ofs::UInt32,size::UInt64,s::String)
             elseif bloom & minihash(cp) == 0
                 # cp does not occur in s
                 i += size
-            elseif
+            else
                 # default skip: 1 byte
                 i += 1
             end
@@ -401,7 +402,7 @@ content is removed from this.
 no buffer reorganization, but flushing can increase
 re-use of an unshared buffer
 """
-function Base.flush(io::IOShared{T<:IO})
+function Base.flush(io::IOShared{T}) where T <: IO
     if io.flushable && usize(io) > 0
         twrite(io.io,io.readofs,usize(io), io.buffer)
         io.readofs = io.writeofs
@@ -426,14 +427,14 @@ function Base.show(io::IO, b::IOShared)
     if len<=11
         print(io,SubString(buffer,readofs+1,readofs+len))
     else
-        print(io,SubString(buffer,readofs+1,readofs+5)),
+        print(io,SubString(buffer,readofs+1,readofs+5),
         '~',SubString(buffer,size-4,size))
     end
     print(io,"')")
 end
 
 
-function Base.skip(io:IOShared, delta::Integer)
+function Base.skip(io::IOShared, delta::Integer)
     d = UInt32(delta) #  checks negative
     if io.writeofs-io.readofs < d
         fill(d)
@@ -447,24 +448,8 @@ end
 
 
 "read token shared (no string allocation)"
-function Base.read(io::IOShared, ::Type{Token})
-    t = read(io,::HybridToken)
-    size = usize(t)
-    if size <= MAX_DIRECT_SIZE
-        t = hf(read(io,df(t))
-        @inbounds bt = Token(t,EMPTYSTRING)
-    else
-        @inbounds bt = Token(hf(uint(t)|io.readofs),io.buffer)
-        io.readofs += size
-        share(io,io.readofs)
-    end
-    bt
-end
-
-
-"read token shared (no string allocation)"
 function Base.read(io::IOShared, ::Type{BToken})
-    t = read(io,::HybridToken)
+    t = read(io,HybridFly)
     size = usize(t)
     tt = bf(uint(t)|io.readofs)
     io.readofs += size
@@ -479,7 +464,7 @@ function Base.read(io::IOShared, ::Type{Token})
     ss = EMPTYSTRING
     size = usize(tt)
     if size <= MAX_DIRECT_SIZE
-        tt = hf(read(io,df(tt))
+        tt = hf(read(io,df(tt)))
     else
         # reference and skip string data in IOShared instance
         tt = hf((u64(tt)) | io.readofs) # add offset
@@ -621,7 +606,7 @@ function Base.read(io::IOShared, ::Type{Token})
         @inbounds Token(t, read(io,size,String))
     end
 
-    tt = read(io,HybridToken)
+    tt = read(io,HybridFly)
     if isdirect(tt)
         # TODO can we reference bytes in io instance in this case??
         # possibly dependent on endianness...

@@ -5,7 +5,7 @@ Central token type: a flyweight token plus its buffer
 struct GenericToken{FLY<:FlyToken} <: AbstractToken
     fly :: FLY # category, size, offset, possibly content
     buffer :: String # memory with token text data or EMPTYSTRING
-    function GenericToken{FLY}(fly::FLY, buffer::String)
+    function GenericToken{FLY}(fly::FLY, buffer::String) where FLY<:FlyToken
         @boundscheck isdirect(fly) || usize(fly)==0 || checkbounds(buffer,offset(fly)+usize(fly))
         new(fly,buffer)
     end
@@ -13,8 +13,7 @@ end
 
 ## GenericToken constructors
 
-Base.@propagate_inbounds
-function GenericToken(fly::FLY, buffer::String) where FLY<:FlyToken
+Base.@propagate_inbounds function GenericToken(fly::FLY, buffer::String) where FLY<:FlyToken
     GenericToken{FLY}(fly,buffer)
 end
 
@@ -52,14 +51,13 @@ BToken(cat::TCategory, s::String) = BToken(BufferFly(cat,usize(s)),s)
  Token(cat::TCategory) = Token(cat,EMPTYSTRING)
 BToken(cat::TCategory) = BToken(cat,EMPTYSTRING)
 
-Base.@propagate_inbounds
-function BToken(cat::TCategory,offset::UInt32, size::UInt64, s::String)
+Base.@propagate_inbounds function BToken(cat::TCategory,offset::UInt32, size::UInt64, s::String)
     size == 0 && return BToken(cat)
     @boundscheck checkbounds(s,offset+size)
     BToken(BufferFly(cat,offset,size),s)
 end
-Base.@propagate_inbounds
-function Token(cat::TCategory,offset::UInt32, size::UInt64, s::String)
+
+Base.@propagate_inbounds function Token(cat::TCategory,offset::UInt32, size::UInt64, s::String)
     size == 0 && return Token(cat)
     @boundscheck checkbounds(s,offset+size)
     Token(HybridFly(cat,offset,size),s)
