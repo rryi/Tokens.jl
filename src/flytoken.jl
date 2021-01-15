@@ -304,7 +304,7 @@ with respect to the referenced buffer in your code elsewere.
 
 """
 Base.@propagate_inbounds function BufferFly(cat::TCategory, offset::UInt32, size::UInt64)
-    BufferFly(t),size)|offset
+    BufferFly(cat,size)|offset
 end
 
 
@@ -481,7 +481,6 @@ function Base.write(io::IO, t::HybridFly)
         return nothing
     end
     # 4-byte-format
-    write(io,0x)
     write(io,(size>>3)%UInt8)
     write(io,(size>>11)%UInt8)
     write(io,(size>>19)%UInt8)
@@ -494,11 +493,11 @@ end
 ## Base operators and functions overloading ##
 
 "bitwise OR applied to a FlyToken."
-Base.(|)(f::F, orValue::T) where {F<:FlyToken,T<:Unsigned} =
+Base.:|(f::F, orValue::T) where {F<:FlyToken,T<:Unsigned} =
     reinterpret(F,u64(f) | orValue)
 
 "bitwise AND applied to a FlyToken."
-base.(&)(f::F, andValue::T) where {F<:FlyToken,T<:Unsigned} =
+Base.:&(f::F, andValue::T) where {F<:FlyToken,T<:Unsigned} =
         reinterpret(F,u64(f) & andValue)
 
 # serializing of DirectFly
@@ -566,7 +565,7 @@ function Base.cmp(a::DirectFly, b::DirectFly)
 end
 
 
-function Base.==(a::DirectFly, b::DirectFly)
+function Base.:(==)(a::DirectFly, b::DirectFly)
     # both tiny: compare all code units in one step
     (u64(a)&CODEUNIT_BITS) == (u64(b)&CODEUNIT_BITS)
 end

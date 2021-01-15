@@ -9,7 +9,7 @@ export AbstractToken, offset, isdirect, category, TCategory, usize
 export subtoken, EMPTYSTRING, tread, twrite
 
 include("flytoken.jl")
-export DirectFly,
+export DirectFly
 
 include("token.jl")
 export Token, BToken
