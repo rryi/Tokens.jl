@@ -146,6 +146,10 @@ end
 """
 Token category definitions
 
+These token categories describe the semantics of token lexer in this package.
+They might fit well for other use cases, but feel free to use the catetory
+4-bit-field for any purpose in other applications. 
+
 # group (1): character sequences based on character classes
 
 ## T_WHITE = 0
