@@ -3,6 +3,7 @@ module Tokens
 using MurmurHash3
 #using BitFlags
 
+include("checks.jl")
 include("base.jl")
 export AbstractToken, offset, isdirect, category, TCategory, usize
 # all TCategory values and its string macros are exported by base.jl

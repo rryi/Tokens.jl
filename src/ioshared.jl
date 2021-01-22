@@ -7,17 +7,31 @@
 const MaybeIO = Union{IO,Nothing}
 
 """
-Similar to IObuffer, but can share content with SubString and AbstractToken instances.
+IO buffer which can share content with SubString and AbstractToken instances.
 
-Maintains two internal pointers, one for the read position, one for the write
-(==append) position. Can be used as byte queue (intzerrmittent reads and writes).
-Reading tokens does never allocate on heap - returned tokens simply share the
-internal buffer, IOShare instance will "copy on write" to protect shared data.
+Reading of tokens or substrings can be done without heap allocations - 
+such returned items simply share the internal buffer, IOShare instance 
+will "copy on write" to protect shared data.
 
-IOShared can be used for buffered input or output, by attaching a data source
-or data sink.
+IOShared comes in three flavours:
 
-IOShared can act as a mutable string, supporting in place content changes.
+ * IOShared{Nothing}: closely resembles IOBuffer with some additional 
+ text processing methods giving a "mutable string" behavior.
+
+ * IOShared{T<:IO}, flushable: buffered output stream.
+ writeable but not readable, all data written finally go to a data sink
+ attached by constructor.
+
+ * IOShared{T<:IO}, not flushable: buffered input stream.
+ readable but not writeable, internal buffer is filled from a data source
+ attached by constructor.
+
+
+Maintains two internal offsets, marking the currently valid part of the internal buffer.
+One is the current read position, the other the current write
+(==append) position. IOShared{Nothing} can be used as byte queue (intermittent reads and writes).
+
+
 
 """
 mutable struct IOShared{T <: MaybeIO} <: IO
@@ -28,8 +42,8 @@ mutable struct IOShared{T <: MaybeIO} <: IO
     shared :: UInt32 # offset in buffer behind last shared byte (0: nothing shared)
     limit ::  UInt32 # total number of bytes in buffer
     preferredlimit ::  UInt32 # limit in case of reallocation due to sharing
-    flushable :: Bool # true: io is target for flush. false: io is source for fill
-    io::T # nothing or if flushable: target for flush else: source for fill
+    flushable :: Bool # true: io is target for flush. false: io is source for fillup
+    io::T # nothing or if flushable: target for flush else: source for fillup
     function IOShared{T}(limit::UInt32,flushable::Bool,io::T) where T <: MaybeIO
         z = zero(UInt32)
         s = _string_n(limit)
@@ -236,7 +250,7 @@ ensure that count bytes can be read from io or throw an error.
 function ensure_readable(io::IOShared, count::UInt32)
     usize(io) >= count && return
     if !(io.io isa Nothing)
-        fill(io,count-usize(io)%UInt32)
+        fillup(io,count-usize(io)%UInt32)
         usize(io) >= count && return
     end
     error("read request beyond end-of-data",io,count)
@@ -248,9 +262,9 @@ function fill end
 
 
 """
-    fill(io::IO,count::UInt32)
+    fillup(io::IO,count::UInt32)
 
-try to read at least count bytes into io.
+if io try to get count bytes try to make available at least count bytes in buffer of iointo io .
 n, the number of bytes read, may vary a lot:
 
 n==0 (because nothing is available),
@@ -260,9 +274,9 @@ n > count (we have more bytes available and more space in io.buffer)
 
 NOOP if IO is flushable or io <:IO{Nothing}
 """
-fill(io::IO,count::UInt32) = nothing
+fillup(io::IO,count::UInt32) = nothing
 
-function fill(io::IOShared{T}, count::UInt32) where T <: IO
+function fillup(io::IOShared{T}, count::UInt32) where T <: IO
     io.flushable && return nothing
     avail = min(bytesavailable(io.io), typemax(UInt32)) % UInt32
     if count > avail
@@ -434,10 +448,17 @@ function Base.show(io::IO, b::IOShared)
 end
 
 
-function Base.skip(io::IOShared, delta::Integer)
-    d = UInt32(delta) #  checks negative
+function Base.skip(io::IOShared, delta::Integer) 
+    pos = io.readofs%Int64 + delta
+    if pos>io.writeofs
+        fill(io,UInt32(pos-io.writeofs))
+    end
+    pos < 0 && error("IOShared skip results in illegal position: $pos")
+        
+    else
+    end
     if io.writeofs-io.readofs < d
-        fill(d)
+        fill(io,d)
         if io.writeofs-io.readofs < d
             d = io.writeofs-io.readofs
         end
@@ -447,197 +468,83 @@ function Base.skip(io::IOShared, delta::Integer)
 end
 
 
-"read token shared (no string allocation)"
+function Base.skip(io::IOShared, delta::Integer)
+    d = UInt32(delta) #  checks negative
+    if io.writeofs-io.readofs < d
+        fill(io,d)
+        if io.writeofs-io.readofs < d
+            d = io.writeofs-io.readofs
+        end
+    end
+    io.readofs += d
+    return io # same return convention as skip(IOBuffer,..)
+end
+
+
+"""
+    Base.read(io::IOShared, ::Type{BToken})
+
+Read a Token, sharing the buffer (no content copying).
+This is a main benefit of IOShared over IOBuffer: 
+IOShared is still mutable, it keeps track of shared portions 
+and reallocates if shared portions have to be changed.
+
+"""
 function Base.read(io::IOShared, ::Type{BToken})
-    t = read(io,HybridFly)
+    tt = read(io,BufferFly)
     size = usize(t)
-    tt = bf(uint(t)|io.readofs)
+    ensure_readable(io,size)
+    tt |= io.readofs
     io.readofs += size
-    @inbounds  BToken(tt,share(io,io.readofs))
+    @inbounds BToken(tt,share(io,io.readofs))
 end
 
 
 
-"optimized: no string allocation"
+"read token shared (no string allocation)"
 function Base.read(io::IOShared, ::Type{Token})
-    tt = read(io,HybridFly)
-    ss = EMPTYSTRING
-    size = usize(tt)
-    if size <= MAX_DIRECT_SIZE
-        tt = hf(read(io,df(tt)))
-    else
-        # reference and skip string data in IOShared instance
-        tt = hf((u64(tt)) | io.readofs) # add offset
-        io.readofs += size
-        ss = share(io,io.readofs)
+    p =  read(io,Packed31)
+    size = bits4_30(p)
+    if (size<=MAX_DIRECT_SIZE)
+        return Token(read(io,p,DirectFly))
     end
-    @inbounds Token(tt,ss)
-end
-
-"""
-    unsafe_tread(from::IOShared, fly::HybridFly) ::Token
-
-read contents of an incomplete HybridFly (only category, size is defined,
-other bytes are 0) and returns it as Token.
-
-Method is named unsafe because returned Token references the buffer of from
-without explicit sharing. Returned Token might become invalid with the next
-operation on from.
-
-This is an internal helper method. Use tread(from,fly) in application code,
-which implements proper sharing.
-"""
-function unsafe_tread(from::IOShared, fly::HybridFly) ::Token
-    if isdirect(fly)
-        return hf(read(from,fly))
-    end
-    size = usize(fly)
-    ensure_readable(from, size%UInt32)
-    fly = fly | from.readofs
-    from.readofs += size
-    Token(fly,from.buffer)
+    ensure_readable(io,size)
+    tt = BufferFly(p)
+    # reference and skip string data in IOShared instance
+    tt |= io.readofs # add offset
+    io.readofs += size
+    @inbounds Token(hf(tt),share(io,io.readofs))
 end
 
 
+"""
+    put(pool::IOShared, t::ParameterizedToken, locate::Bool = false)
 
+
+put contents of a token into a pool and return a token of the 
+same content and type. Noop if content is already in pool or
+a direct coded in flytoken. 
+
+If locate is true, a search for the contents in pool is performed,
+found contents is referenced. This can reduce memory consumption 
+but increases CPU use.
 
 """
-read a Token using size and category from an incomplete HybridFly
-"""
-function tread(from::IOShared, t::HybridFly) ::Token
-    ret = unsafe_tread(from,t)
-    share(from,from.readofs)
-    ret
-end
-
-
-
-"""
-    Base.read(io::IOShared, fly::HybridFly, pool::IOShared, intern::Bool=false)
-
-read contents for an incomplete  HybridFly (category and size is defined,
-all other bytes are 0). Such a HybridFly is constructed by HybridFly(category,size)
-or by reading a hybridFly from some IO.
-
-If fly is a DirectFly, return it with contents read from io.
-Otherwise, read contents and store it in pool, without sharing it with io.
-If intern is true, pool is searched if it already contains contents.
-If not found, contents is appended to pool.
-The offset in pool is returned within the HybridFly.
-
-This method is intended for a scenario where sharing of io is ineffective and
-should be avoided.
-It avouds copying the bufer twiceto be avoided
-found, contents is appended to pool
-"""
-function put(pool::IOShared, t::GenericToken, intern::Bool = false)
+function put(pool::IOShared, t::ParameterizedToken{FLY}, locate::Bool = false) where FLY <:FlyToken
     isdirect(t) && return t # nothing to do on DirectToken
+    t.buffer === pool.buffer && return t # nothing to do on already pooled content
     size = usize(t)
     ofs = typemax(UInt32)
-    if intern
+    if locate
         ofs = locate(pool,offset(t),size,t.buffer)
     end
     if ofs ==typemax(UInt32)
-        unsafe_write
+        # not found: append data
         ensure_writeable(pool,size)
         ofs = pool.writeofs
-
-        pool.share(ofs+size%UInt32)
-        return Token((t.fly & !OFFSET_BITS) | ofs),pool.share(ofs+size%UInt32))
+        write(pool,offset(t),size,t.buffer)
     end
-    twrite(pool,from.readofs,size,from.buffer)
-
-
-    tt = read(io,HybridFly)
-
-    ss = EMPTYSTRING
-    size = usize(tt)
-    if size <= MAX_DIRECT_SIZE
-        return hf(read(io,df(tt))
-    else
-        if intern
-            ofs = locate(buffer,io.readofs,usize(tt),io.buffer)
-        # reference and skip string data in IOShared instance
-        tt = hf((u64(tt)) | io.readofs) # add offset
-        io.readofs += size
-        ss = share(io,io.readofs)
-    end
-    @inbounds Token(tt,ss)
-end
-
-
-function tread(io::IOShared, t::DirectFly) ::DirectFly
-    size = usize(t)
-    ensure_readable(size)
-    b = io.buffer
-    GC.preserve b begin
-        for i in 1:size
-            t = unsafe_setcodeunit(t,i,unsafe_load(io.ptr+io.readofs)
-            io.readofs += 1
-        end
-    end
-    t
-end
-
-
-# serializing of DirectFly
-function Base.write(io::IOShared, t::DirectFly)
-    write(io,hf(t))
-    size = usize(t)
-    ensure_writeable(size)
-    b = io.buffer
-    GC.preserve b begin
-        for i in 1:size
-            unsafe_store!(io.ptr+io.writeofs,@inbounds codeunit(t,i))
-            io.writeofs += 1
-        end
-    end
-end
-
-
-function Base.read(io::IOShared, ::Type{Token})
-    t = read(io,HybridFly)
-    size = usize(t)
-    if size <= MAX_DIRECT_SIZE
-        t = hf(read(io,df(t)))
-        return @inbounds Token(t,EMPTYSTRING)
-    end
-
-        @inbounds Token(t, read(io,size,String))
-    end
-
-    tt = read(io,HybridFly)
-    if isdirect(tt)
-        # TODO can we reference bytes in io instance in this case??
-        # possibly dependent on endianness...
-        BToken(df(tt))
-    else
-        # reference buffer
-        tt = bf(u64(tt)& ~OFFSET_BITS)
-        size = usize(tt)
-        tt = hf((u64(tt)& ~OFFSET_BITS) | ofs)
-        ss = io.buffer
-        io.readofs += size
-        @inbounds BToken(bf(tt), t.ss)
-    end
-end
-
-function Base.read(io::IOShared, ::Type{BToken})
-    t = read(io,Token)
-    tt = t.tiny
-    if isdirect(tt)
-        # TODO can we reference bytes in io instance in this case??
-        # possibly dependent on endianness...
-        BToken(df(tt))
-    else
-        # reference buffer
-        tt = bf(u64(tt)& ~OFFSET_BITS)
-        size = usize(tt)
-        tt = hf((u64(tt)& ~OFFSET_BITS) | ofs)
-        ss = io.buffer
-        io.readofs += size
-        @inbounds BToken(bf(tt), t.ss)
-    end
+    @inbounds ParameterizedToken{FLY}((t.fly & !OFFSET_BITS) | ofs,share(pool,ofs+size%UInt32))
 end
 
 
@@ -653,7 +560,7 @@ end
 function Base.unsafe_write(to::IOShared, p::Ptr{UInt8}, nb::UInt)
     ensure_writeable(to,nb)
     b = to.buffer
-    GC.@preserve b unsafe_copyto!(to.ptr+to.writeofs), p, nb)
+    GC.@preserve b unsafe_copyto!(to.ptr+to.writeofs, p, nb)
     to.writeofs += nb
     nothing
 end
@@ -667,9 +574,10 @@ function base.read(from::IOShared, ::Type{UInt8})
     ret
 end
 
-function read(from::IOShared, T::Union{Type{Int16},Type{UInt16},Type{Int32},Type{UInt32},Type{Int64},Type{UInt64},Type{Int128},Type{UInt128},Type{Float16},Type{Float32},Type{Float64}})
+
+function Base.read(from::IOShared, T::Union{Type{Int16},Type{UInt16},Type{Int32},Type{UInt32},Type{Int64},Type{UInt64},Type{Int128},Type{UInt128},Type{Float16},Type{Float32},Type{Float64}})
     nb = sizeof(T)
-    ensure_readable(nb)
+    ensure_readable(from,nb)
     b = from.buffer
     GC.@preserve b begin
         ptr::Ptr{T} = from.ptr+from.readofs
@@ -680,65 +588,94 @@ function read(from::IOShared, T::Union{Type{Int16},Type{UInt16},Type{Int32},Type
 end
 
 
-@inline function read(from::IOShared, ::Type{UInt8})
-    from.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
-    ptr = from.readofs
-    size = from.writeofs
-    if ptr > size
-        throw(EOFError())
+function Base.eof(io::IOShared)
+    if io.readofs >= io.writeofs
+        fill(io,1%Uint32)
     end
-    @inbounds byte = codeunit(from.buffer,ptr+1)
-    from.readofs = ptr + 1
-    return byte
+    return io.readofs >= io.writeofs
 end
 
-function peek(from::GenericIOBuffer)
-    from.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
-    if from.readofs > from.writeofs
-        throw(EOFError())
-    end
-    return from.data[from.readofs]
-end
+"no of bytes immediately available for reading "
+Base.bytesavailable(io::IOShared) = usize(io)%Int
 
-read(from::GenericIOBuffer, ::Type{Ptr{T}}) where {T} = convert(Ptr{T}, read(from, UInt))
 
-isreadable(io::GenericIOBuffer) = io.readable
-iswritable(io::GenericIOBuffer) = io.writable
+Base.bytesavailable(io::IOShared{T}) where T <: IO = usize(io)%Int + bytesavailable(io.io)
 
-# TODO: GenericIOBuffer is not iterable, so doesn't really have a length.
-# This should maybe be sizeof() instead.
-#length(io::GenericIOBuffer) = (io.seekable ? io.writeofs : bytesavailable(io))
-bytesavailable(io::GenericIOBuffer) = io.writeofs - io.readofs + 1
-position(io::GenericIOBuffer) = io.readofs-1
 
-function skip(io::GenericIOBuffer, n::Integer)
-    seekto = io.readofs + n
-    n < 0 && return seek(io, seekto-1) # Does error checking
-    io.readofs = min(seekto, io.writeofs+1)
+
+Base.position(io::IOShared) = io.readofs %Int
+
+
+# seek makes no sense for queue-like buffers
+function Base.seek(io::IOShared{Nothing}, n::Integer)
+    # different from IOBuffer which projects on valid offsets, due to a REPL requirement
+    (n < 0 || n > io.writeofs) && throw(ArgumentError("Attempted to seek outside IOShared boundaries."))
+    io.readofs = n%UInt32
     return io
 end
 
-function seek(io::GenericIOBuffer, n::Integer)
-    if !io.seekable
-        ismarked(io) || throw(ArgumentError("seek failed, IOBuffer is not seekable and is not marked"))
-        n == io.mark || throw(ArgumentError("seek failed, IOBuffer is not seekable and n != mark"))
+
+Base.seekstart(io::IOShared{Nothing}) = seek(io,0)
+
+
+function Base.seekend(io::IOShared)
+    io.readofs = io.writeofs
+    return io
+end
+
+
+
+
+"return up to requested count bytes as Vector"
+function Base.read(src::IOshared, count::Integer = typemax(Int))
+    size = min (count, bytesavailable(src))
+    b = Vector{UInt8}(undef, size)
+    readbytes!(src, b, size)
+    return b
+end
+
+
+function Base.readbytes!(src::IOShared, b::Vector{UInt8}, count=length(b))
+    # resize if necessary
+    size = min (count, bytesavailable(src))
+    if (size > length(b))
+        resize!(b, size)
     end
-    # TODO: REPL.jl relies on the fact that this does not throw (by seeking past the beginning or end
-    #       of an GenericIOBuffer), so that would need to be fixed in order to throw an error here
-    #(n < 0 || n > io.writeofs) && throw(ArgumentError("Attempted to seek outside IOBuffer boundaries."))
-    #io.readofs = n+1
-    io.readofs = max(min(n+1, io.writeofs+1), 1)
-    return io
+    unsafe_read(src,pointer(b),size)
+    return size
 end
 
-function seekend(io::GenericIOBuffer)
-    io.readofs = io.writeofs+1
-    return io
+
+function Base.peek(from::IOShared)
+    ensure_readable(from,1)
+    b = from.buffer
+    x = 0%UInt8
+    GC.@preserve b begin
+        ptr::Ptr{T} = from.ptr+from.readofs
+        x = unsafe_load(ptr)
+    end
+    return x
 end
 
-function truncate(io::GenericIOBuffer, n::Integer)
-    io.writable || throw(ArgumentError("truncate failed, IOBuffer is not writeable"))
-    io.seekable || throw(ArgumentError("truncate failed, IOBuffer is not seekable"))
+
+Base.read(from::IOShared, ::Type{Ptr{T}}) where {T} = convert(Ptr{T}, read(from, UInt))
+
+
+Base.isreadable(io::IOShared) = true
+Base.iswritable(io::IOShared) = true
+
+
+
+
+"similar to take!(IOBuffer) but returns a substring instead of a mutable byte array"
+function Base.take!(io::IOShared{Nothing})
+    ss = SubString(io.readofs,usize(io), shared(io,io.writeofs))
+    io.readofs = io.writeofs = 0
+    return ss
+end
+
+
+function truncate(io::IOShared{Nothing}, n::Integer)
     n < 0 && throw(ArgumentError("truncate failed, n bytes must be ≥ 0, got $n"))
     n > io.limit && throw(ArgumentError("truncate failed, $(n) bytes is exceeds IOBuffer limit $(io.limit)"))
     if n > length(io.data)
@@ -770,7 +707,8 @@ function compact(io::GenericIOBuffer)
     return io
 end
 
-@inline ensureroom(io::GenericIOBuffer, nshort::Int) = ensureroom(io, UInt(nshort))
+
+@inline ensureroom(io::IOBuffer, nshort::Int) = ensureroom(io, UInt32(nshort))
 @inline function ensureroom(io::GenericIOBuffer, nshort::UInt)
     io.writable || throw(ArgumentError("ensureroom failed, IOBuffer is not writeable"))
     if !io.seekable
@@ -795,8 +733,6 @@ end
     end
     return io
 end
-
-eof(io::GenericIOBuffer) = (io.readofs-1 == io.writeofs)
 
 @noinline function close(io::GenericIOBuffer{T}) where T
     io.readable = false
@@ -831,43 +767,7 @@ julia> String(take!(io))
 "JuliaLang is a GitHub organization. It has many members."
 ```
 """
-function take!(io::GenericIOBuffer)
-    ismarked(io) && unmark(io)
-    if io.seekable
-        nbytes = io.writeofs
-        data = copyto!(StringVector(nbytes), 1, io.data, 1, nbytes)
-    else
-        nbytes = bytesavailable(io)
-        data = read!(io,StringVector(nbytes))
-    end
-    if io.writable
-        io.readofs = 1
-        io.writeofs = 0
-    end
-    return data
-end
-function take!(io::IOBuffer)
-    ismarked(io) && unmark(io)
-    if io.seekable
-        data = io.data
-        if io.writable
-            limit = (io.limit == typemax(Int) ? 0 : min(length(io.data),io.limit))
-            io.data = StringVector(limit)
-        else
-            data = copy(data)
-        end
-        resize!(data,io.writeofs)
-    else
-        nbytes = bytesavailable(io)
-        a = StringVector(nbytes)
-        data = read!(io, a)
-    end
-    if io.writable
-        io.readofs = 1
-        io.writeofs = 0
-    end
-    return data
-end
+
 
 function write(to::GenericIOBuffer, from::GenericIOBuffer)
     if to === from

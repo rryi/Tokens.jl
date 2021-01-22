@@ -294,6 +294,35 @@ Base.@propagate_inbounds function BufferFly(cat::TCategory, size::UInt64)
 end
 
 
+
+"""
+raw incomplete token with category and size in packed format, offset 0
+"""
+function BufferFly(cat_size::Packed31)
+    u = NOTTINY_BIT | (cat_size%UInt64) <<59 # tricky: all bits above category are shifted out or set by NOTTINYBIT
+    s = bits4_30(cat_size)%UInt64
+    u |= FLY_SPLIT_SIZE ? ((s&7)<<56) | ((s>>>3)<<32)  :  (s<<32)
+    bf(u)
+end
+
+
+"raw DirectFly with all content bytes 0"
+Base.@propagate_inbounds function DirectFly(cat_size::Packed31)
+    u = ((cat_size%UInt64) <<59) & CATEGORY_BITS
+    s = bits4_30(cat_size)%UInt64
+    @boundscheck checksize(s,MAX_DIRECT_SIZE)
+    u |= ((s&7)<<56)
+    df(u)
+end
+
+
+"raw Hybridfly: direct if size <8"
+function HybridFly(cat_size::Packed31)
+    @inbounds hf( UInt32(cat_size)<= 0x0000007F ? DirectFly(cat_size) : BufferFly(cat_size))
+end
+
+
+
 """
 Lowlevel constructor for a token referencing some external buffer.
 
@@ -316,15 +345,15 @@ All codeunit bytes are 0, length is 0.
 DirectFly(cat::TCategory) = df( UInt64(cat)<<59 )
 
 
-"token with given size, bounds-checked, offset 0"
+"token with given size, bounds-checked, all code units are 0, prepared for unsafe_setcodeunit"
 Base.@propagate_inbounds function DirectFly(cat::TCategory, size::UInt64)
     @boundscheck checksize(size,MAX_DIRECT_SIZE)
-    df(u64(DirectFly(cat)) | size<<56)
+    df(DirectFly(cat)) | (size << 56)
 end
 
 
 
-"Construct a DirectFly for size beliw 8 else a BufferFly"
+"Construct a DirectFly for size below 8, else a BufferFly with offset 0"
 Base.@propagate_inbounds function HybridFly(cat::TCategory, size::UInt64)
     size <= MAX_DIRECT_SIZE ?
         hf(DirectFly(cat,size)) :
@@ -408,84 +437,9 @@ function usize(t::HybridFly)
 end
 
 
-"""
-    read(io:, t::DirectFly)::DirectFly
+## helpers for IO
+Packed31(f::FlyToken)=Packed31(category(f)%UInt8, usize(f)%UInt32)
 
-read the string portion of a DirectFly
-into a DirectFly which already has category and size.
-"""
-
-"read the string portion of a DirectFly"
-function tread(io::IO, t::DirectFly) ::DirectFly
-    for i in 1:usize(t)
-        t = unsafe_setcodeunit(t,i,read(io,UInt8))
-    end
-    t
-end
-
-
-"""
-    read(io::IO)::HybridFly
-
-read category and size in HybridFly bit layout.
-Uses variable length encoding optimized for small sizes (<=7, <=2047)
-returned HybridFly is a DirectFly if size<=7, else a BufferFly.
-
-This is an internal, private helper method.
-It does NOT read any offset or content data!
-"""
-function read(io::IO,::Type{HybridFly})
-    b = read(io,Int8)
-    if b >= 0 # implies size <= 7
-        return hf((b%UInt64)<<56)
-    end
-    size = (b & MAX_DIRECT_SIZE) % UInt64
-    size |=  (read(io,UInt8)%UInt32) << 3
-    if size <= MAX_DIRECT_SIZE
-        # read 3 more bytes
-        size |=  (read(io,UInt8)%UInt32) << 3
-        size |=  (read(io,UInt8)%UInt32) << 11
-        size |=  (read(io,UInt8)%UInt32) << 19
-    end
-    return hf(BufferFly(TCategory((b>>3)%UInt8 &0x0f),size))
-end
-
-
-"""
-    write(io::IO, t::HybridFly)
-
-write category and size from HybridFly.
-variable length writing optimized for small sizes (<=7, <=2047)
-Expects a "real" HybridFly, i.e. it is allowed to have a
-BufferFly with size <=7.
-
-This is an internal, private helper method.
-It does NOT write any offset or content data!
-"""
-function Base.write(io::IO, t::HybridFly)
-    if isdirect(t)
-        write(io,(uint(t)>>56)%UInt8)
-        return nothing
-    end
-    size = usize(t)
-    b = (t>>56)%UInt8  | (size&MAX_DIRECT_SIZE)%UInt8
-    if size<=MAX_DIRECT_SIZE
-        # token is not direct, but has compact format
-        write(io,b&0x7f)
-        return nothing
-    end
-    write(io,b) # large size bit is set because t not direct
-    if size<2048
-        # 2-byte-format
-        write(io,(size>>3)%UInt8) # is !=0 because size>7
-        return nothing
-    end
-    # 4-byte-format
-    write(io,(size>>3)%UInt8)
-    write(io,(size>>11)%UInt8)
-    write(io,(size>>19)%UInt8)
-    nothing
-end
 
 
 
@@ -502,19 +456,30 @@ Base.:&(f::F, andValue::T) where {F<:FlyToken,T<:Unsigned} =
 
 # serializing of DirectFly
 function Base.write(io::IO, t::DirectFly)
-    b = (u64(t)>> 56) % UInt8
-    write(io,hf(t))
+    write(io,Packed31(t))
     for i in 1:usize(t)
         write(io, @inbounds codeunit(t,i))
     end
 end
 
-
-function Base.read(io::IO, ::Type{DirectFly})
-    t = df(read(io,HybridFly))
-    @boundscheck isdirect(t) || boundserror("size too long for DirectFly")
-    tread(io,t)
+  
+"read contents of a DirectFly for already given category and size"
+function Base.read(io::IO, cat_size::Packed31,::Type{DirectFly})
+    size = bits4_30(cat_size)
+    t = DirectFly(cat_size)
+    for i in 1:size
+        t = unsafe_setcodeunit(t,i,read(io,UInt8))
+    end
+    t
 end
+
+
+
+"read complete DirectFly"
+function Base.read(io::IO, ::Type{DirectFly})
+    read(io, read(io,Packed31),DirectFly) # category and size
+end
+
 
 
 function Base.codeunit(t::DirectFly, index::Int)

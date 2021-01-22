@@ -2,10 +2,10 @@
 """
 Central token type: a flyweight token plus its buffer
 """
-struct GenericToken{FLY<:FlyToken} <: AbstractToken
+struct ParameterizedToken{FLY<:FlyToken} <: AbstractToken
     fly :: FLY # category, size, offset, possibly content
     buffer :: String # memory with token text data or EMPTYSTRING
-    function GenericToken{FLY}(fly::FLY, buffer::String) where FLY<:FlyToken
+    function ParameterizedToken{FLY}(fly::FLY, buffer::String) where FLY<:FlyToken
         @boundscheck isdirect(fly) || usize(fly)==0 || checkbounds(buffer,offset(fly)+usize(fly))
         new(fly,buffer)
     end
@@ -13,8 +13,8 @@ end
 
 ## GenericToken constructors
 
-Base.@propagate_inbounds function GenericToken(fly::FLY, buffer::String) where FLY<:FlyToken
-    GenericToken{FLY}(fly,buffer)
+Base.@propagate_inbounds function ParameterizedToken(fly::FLY, buffer::String) where FLY<:FlyToken
+    ParameterizedToken{FLY}(fly,buffer)
 end
 
 
@@ -22,22 +22,26 @@ end
 Recommended general-purpose Token implementation.
 
 Immutable token, contents either directly stored or buffer based.
+Use this type if you expect many token sizes below 8, and want to reduce
+memory consumptionand better data locality. It comes at the price of an
+additional comparison for most token operations (casting to BToken or DirectFly). 
 
-# implementation details
+# implementation hint:
 
 Constructors try to avoid copying contents: if contents is backed by a
 String instance, that string will be used as buffer via a BufferFly,
-even if size is below 8.
+even ifs size is below 8. To get directly stored content, construct from a
+DirectFly. 
 """
-const Token = GenericToken{HybridFly}
+const Token = ParameterizedToken{HybridFly}
 
 
 """
-Immutable token, always buffer based
+Immutable token, always buffer based.
 
-Use this type if you expect most token sizes to be above 7
+Use this type if you expect mostly a token size above 7
 """
-const BToken = GenericToken{BufferFly}
+const BToken = ParameterizedToken{BufferFly}
 
  Token(t::DirectFly) = @inbounds Token(hf(t),EMPTYSTRING)
 BToken(t::DirectFly) = BToken(BufferFly(category(t),usize(t)),string(t))
@@ -101,13 +105,13 @@ end
 
 ## Token API methods ##
 
-offset(t::GenericToken) = offset(t.fly)
+offset(t::ParameterizedToken) = offset(t.fly)
 
-category(t::GenericToken) = category(t.fly)
+category(t::ParameterizedToken) = category(t.fly)
 
-isdirect(t::GenericToken) = isdirect(t.fly)
+isdirect(t::ParameterizedToken) = isdirect(t.fly)
 
-usize(t::GenericToken) = usize(t.fly)
+usize(t::ParameterizedToken) = usize(t.fly)
 
 
 ## Base methods for tokens ##
@@ -121,18 +125,19 @@ Base.cmp(a::Token, b::Token) = reinterpret(Int64,u64(a.fly)|u64(b.fly))>=0 ? cmp
 
 ## converts
 
-Base.convert(::Type{GenericToken{FLY}}, s::AbstractString) where FLY <:FlyToken = GenericToken{FLY}(T_TEXT,s)
+Base.convert(::Type{ParameterizedToken{FLY}}, s::AbstractString) where FLY <:FlyToken = ParameterizedToken{FLY}(T_TEXT,s)
 
-Base.convert(::Type{GenericToken{FLY}}, t::AbstractToken) where FLY <:FlyToken = GenericToken{FLY}(t)
+Base.convert(::Type{ParameterizedToken{FLY}}, t::AbstractToken) where FLY <:FlyToken = ParameterizedToken{FLY}(t)
+
+Base.convert(::Type{SubString{String}}, t::BToken) = @inbounds SubString(offset(t),usize(t),t.buffer)
+
+Base.convert(::Type{SubString{String}}, t::Token) = convert(SubString{String},BToken(t)) 
+
+Base.convert(::Type{SubString{String}}, t::DirectFly) = convert(SubString{String},BToken(t)) 
 
 
 
-# any use case?? better work with tokens directly, do not convert to (Sub)String
-Base.convert(::Type{SubString{String}}, t::BToken) =
-    @inbounds SubString(t.buffer,offset(t)+1,thisind(offset(t)+ncodeunits(t)))
-
-
-function Base.codeunit(t::GenericToken, i::Int)
+function Base.codeunit(t::ParameterizedToken, i::Int)
     if isdirect(t.fly) # optimized away for BToken because isdirect is constantly false
         codeunit(df(t.fly),i)
     else
@@ -185,31 +190,34 @@ end
 
 
 function Base.read(io::IO, ::Type{Token})
-    t = read(io,HybridFly)
-    size = usize(t)
+    cat_size = read(io,Packed31)
+    size = bits4_30(cat_size)
     if size <= MAX_DIRECT_SIZE
-        t = hf(read(io,df(t)))
-        @inbounds Token(t,EMPTYSTRING)
+        t = read(io,cat_size,DirectFly)
+        Token(t)
     else
-        @inbounds Token(t, read(io,size,String))
+        @inbounds Token(TCategory(bits0_3(cat_size)), read(io,size,String))
     end
 end
 
 
 function Base.read(io::IO, ::Type{BToken})
-    t = read(io,HybridFly)
-    @inbounds BToken(bf(t), read(io,size,String))
+    cat_size = read(io,Packed31)
+    size = bits4_30(cat_size)
+    @inbounds BToken(BufferFly(cat_size), read(io,size,String))
 end
 
 
 # serialize Token and BToken
-function Base.write(io::IO, t::GenericToken)
+function Base.write(io::IO, t::ParameterizedToken)
     tt = t.fly
     if isdirect(tt) # optimized away for BufferFly
         write(io,df(tt))
     else
-        write(io,hf(tt))
-        write(io,offset(bf(tt)),usize(bf(tt)),t.buffer)
+        size = usize(bf(tt))
+        p = Packed31(category(tt)%UInt8, size%UInt32)
+        write(io,p)
+        twrite(io,offset(bf(tt)),size,t.buffer)
     end
 end
 
