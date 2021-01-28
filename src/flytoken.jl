@@ -440,19 +440,32 @@ end
 ## helpers for IO
 Packed31(f::FlyToken)=Packed31(category(f)%UInt8, usize(f)%UInt32)
 
-
-
-
-
 ## Base operators and functions overloading ##
 
+
+function Base.String(d::DirectFly)
+    size = usize(d)
+    s = Base._string_n(size)
+    p = pointer(s)
+    GC.@preserve s begin
+        for i in 1::size 
+            @inbounds unsafe_store!(p,codeunit(d,i),i)
+        end
+    end
+    return s
+end
+
 "bitwise OR applied to a FlyToken."
-Base.:|(f::F, orValue::T) where {F<:FlyToken,T<:Unsigned} =
-    reinterpret(F,u64(f) | orValue)
+Base.:|(f::F, orValue::T) where {F<:FlyToken,T<:Unsigned} = reinterpret(F,u64(f) | orValue)
 
 "bitwise AND applied to a FlyToken."
-Base.:&(f::F, andValue::T) where {F<:FlyToken,T<:Unsigned} =
-        reinterpret(F,u64(f) & andValue)
+Base.:&(f::F, andValue::T) where {F<:FlyToken,T<:Unsigned} = reinterpret(F,u64(f) & andValue)
+
+"add an offset to a FlyToken (error if isdirect(f))."
+Base.:+(f::F, addValue::UInt32) where {F<:FlyToken} = isdirect(f) ? error("cannot add offset to DirectFly") : reinterpret(F,u64(f) + addValue)
+
+
+
 
 # serializing of DirectFly
 function Base.write(io::IO, t::DirectFly)
@@ -561,14 +574,6 @@ end
 #########################################################
 
 
-"throw an error if token references some buffer"
-Base.@propagate_inbounds function checksize(size::Unsigned, maxsize)
-    @boundscheck size <= maxsize ||
-        throw(ErrorException("size beyond limit: $size > $maxsize"))
-    nothing
-end
-
-
 #=
 
 
@@ -577,8 +582,6 @@ Base.iterate(s::FlyToken, i::Integer) = iterate(String(s), i)
 Base.iterate(s::FlyToken) = iterate(String(s))
 Base.print(s::FlyToken) = print(String(s))
 Base.display(s::FlyToken) = display(String(s))
-Base.convert(::FlyToken{T}, s::String) where T = FlyToken{T}(s)
-Base.convert(::String, ss::FlyToken) = String(a) #reduce(*, ss)
 Base.firstindex(::FlyToken) = 1
 Base.collect(s::FlyToken) = getindex.(s, 1:lastindex(s))
 

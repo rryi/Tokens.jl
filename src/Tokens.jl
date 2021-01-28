@@ -4,10 +4,13 @@ using MurmurHash3
 #using BitFlags
 
 include("checks.jl")
-include("base.jl")
+include("abstracttoken.jl")
 export AbstractToken, offset, isdirect, category, TCategory, usize
-# all TCategory values and its string macros are exported by base.jl
-export subtoken, EMPTYSTRING, tread, twrite
+export subtoken, tread, twrite
+# all TCategory values and its string macros are exported by abstracttoken.jl
+
+include("substring.jl")
+include("packed31.jl")
 
 include("flytoken.jl")
 export DirectFly
