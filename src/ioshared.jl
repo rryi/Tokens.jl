@@ -4,7 +4,14 @@
 
 # Stateful string
 
-const MaybeIO = Union{IO,Nothing}
+const MaybeIO = Union{Nothing, IO}
+
+"a constant for a default allocation limit in IOShared and other resizable array structures"
+const DEFAULTLIMIT = 1024%UInt32
+
+"value indicating no mark ist set"
+const NOMARK =typemax(UInt32)
+
 
 """
 IO buffer which can share content with SubString and AbstractToken instances.
@@ -17,7 +24,6 @@ IOShared comes in three flavours:
 
  * IOShared{Nothing}: closely resembles IOBuffer with some additional 
  text processing methods giving a "mutable string" behavior, readableand writable
-
 
  * IOShared{T<:IO}, ioread: buffered input stream.
  readable but not writeable, internal buffer is filled from a data source
@@ -64,22 +70,26 @@ mutable struct IOShared{T <: MaybeIO} <: IO
     mark :: UInt32 # offset of data not to flush/forget. typemax(UInt32): no active mark
     limit ::  UInt32 # total number of bytes in buffer
     preferredlimit ::  UInt32 # limit in case of reallocation due to sharing
-    io::T # nothing or if ioread: source for refill, else target for flush
-    ioread :: Bool # true: io is source for refill. false: io is target for flush or nothing
-    function IOShared{T}(limit::UInt32,io::T,ioread::Bool) where T <: MaybeIO
+    io::T # nothing or if ioread: source for fillup, else target for flush
+    ioread :: Bool # true: io is source for fillup. false: io is target for flush or nothing
+    locateOnPut :: Bool # true: put does lookup content, share instead of append if found
+    function IOShared{T}(io::T,ioread::Bool,limit::UInt32) where T <: MaybeIO
         z = zero(UInt32)
         s = _string_n(limit)
-        new(s,pointer(s),z,z,z,typemax(UInt32),limit,limit,io,ioread)
+        new(s,pointer(s),z,z,z,NOMARK,limit,limit,io,ioread,false)
     end
     function IOShared{Nothing}(offset::UInt32, size::UInt64, s::String)
-        writeofs = offset+size
+        @boundscheck checkrange(offset,size,s)
+        size32= UInt32(size) # check on overflow necessary: cannot handle too long strings
+        preferredlimit = max(size32,DEFAULTLIMIT) # well ... just a very simple guess
         limit = UInt32(ncodeunits(s)) # check on overflow necessary: cannot handle too long strings
-        @boundscheck check_ofs_size(offset,size,limit)
-        new(s,pointer(s),offset,writeofs,typemax(UInt32),limit,limit,size%UInt32,nothing,false)
+        new(s,pointer(s),offset,offset+size32,limit,NOMARK,limit,preferredlimit,nothing,false,false)
     end
 end
 
-IOShared(limit::UInt32) = IOShared(limit,nothing,false)
+IOShared(io::T,ioread:Bool, limit::UInt32=DEFAULTLIMIT) where T <: MaybeIO = IOShared{T}(io,ioread,limit)
+
+IOShared(limit::UInt32=DEFAULTLIMIT) = IOShared(nothing,false,limit)
 
 IOShared(s::SubString{String}) = IOShared{Nothing}(UInt32(s.offset),s.ncodeunits%UInt64,s.string)
 
@@ -88,9 +98,6 @@ IOShared(s::String) = IOShared{Nothing}(zero(UInt32),(ncodeunits(s)%UInt64),s)
 IOShared(t::BToken) = IOShared{Nothing}(offset(t.tiny),usize(t.tiny),t.buffer)
 
 IOShared(t::Token) = IOShared(BToken(t))
-
-IOShared(io::IOShared{Nothing}) = IOShared{Nothing}(io.readofs,(io.writeofs-io.readofs)%UInt64,_share(io,io.limit))
-
 
 
 
@@ -110,6 +117,9 @@ That buffer is typed as String, but somehow violates String immutability:
 only the first share bytes in the returned buffer are guaranteed not to change.
 If io needs to change its buffer in the first share bytes, it allocates a
 new buffer and copies needed content to it.
+
+Of course, the returned String must  be treated immutable - writing to it 
+via pointer operations may result in system crashes.
 
 _share is regarded a private function. To obtain the text content of an IOShared,
 use read operations.
@@ -140,7 +150,8 @@ ofs is internal offset into io-s buffer.
 PRECOND: limit large enough, no share at ofs, no delete beyond io.writeofs
 ofs <= io.writeofs, if resize<0: ofs-resize <= io.writeofs
 
-readofs, writeofs and mark are adjusted in io. No reallocation. 
+readofs, writeofs and mark are adjusted in io. 
+No reallocation - if resize would violate sharing, an error is thrown.
 """
 function _resize(io::IOShared, ofs::UInt32, resize::Int)
     @boundscheck begin
@@ -164,7 +175,7 @@ function _resize(io::IOShared, ofs::UInt32, resize::Int)
     end
     io.writeofs += resize
     ofs<io.readofs && (io.readofs += resize)
-    ofs<io.mark && (io.mark += resize)
+    io.mark != NOMARK && ofs<io.mark && (io.mark += resize)
     nothing
 end
 
@@ -173,11 +184,16 @@ end
 allocate a new buffer and preserve content, resizing at offset ofs.
 
 Method tries to flush first, to reduce allocation as well as
-the amount of bytes to copy
+the amount of bytes to copy.
 
-io is changed, adjusted ofs is returned
+io is changed, adjusted ofs is returned.
+
+Inserted bytes (resize>0) are uninitialized.
 
 ofs precondition: io.readOfs <= ofs <= io.writeOfs
+
+realloc is used internally, external use is allowed but
+not recommended.
 
 """
 function realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
@@ -229,7 +245,7 @@ function realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
     end
     ofs -= preservedofs
     io.readofs -= preservedofs
-    io.mark != typemax(UInt32) && (io.mark -= preservedofs)
+    io.mark != NOMARK && (io.mark -= preservedofs)
     io.shared = 0
     io.writeofs = size %UInt32
     io.limit = limit
@@ -252,6 +268,9 @@ Buffer allocation may change offsets, i.e. io.readofs, io.writeofs and ofs.
 Instance variables are adjusted, the adjusted value of ofs is returned by modify.
 
 Return adjusted ofs
+
+Method is used package-internally, but also exported as central low level
+resize method.
 """
 function modify!(io::IOShared, ofs::UInt32, resize::Int)
     if io.shared<=ofs
@@ -299,6 +318,7 @@ end
 ensure that count bytes can be read from io or throw an error.
 """
 function ensure_readable(io::IOShared{T}, count::UInt32) where T <: MaybeIO
+    fillup(count)
     io.writeofs-io.readofs >= count && return nothing
     if !(T===Nothing)
         fillup(io,count-(io.writeofs-io.readofs))
@@ -311,20 +331,41 @@ end
 """
     fillup(io::IO,count::UInt32)
 
-if io try to get count bytes try to make available at least count bytes in buffer of iointo io .
-n, the number of bytes read, may vary a lot:
+try to ensure that count bytes are readable from io.
+In contrast to  [`ensure_readable`](@ref), no error
+is thrown if not successful.
 
-n==0 (because nothing is available),
-n < count (because only n bytes are available)
-n == count (very unlikely)
-n > count (we have more bytes available and more space in io.buffer)
+if io has an attached data source, and usize(io)<count,
+fillup will try to put additional count-usize(io) bytes 
+from data source into buffer of io.
 
-NOOP if IO is not ioread or io <:IO{Nothing}
+n, the effectively number of bytes which are transferred from data source, 
+may vary a lot:
+
+ * n==0 (because nothing is available),
+ 
+ * 0 < n < count-usize(io) (because only n bytes are available)
+ 
+ * n == count-usize(io) (very unlikely)
+
+ * n > count-usize(io) (data sink has more than n bytes,
+   and we can put more than count bytes into io without reallocation)
+
+fillup is called internally on read requests to ensure enough
+bytes are available in io-s buffer.
+
+Search operations on IOBuffer never do fillup internally. To get
+valid search results, you must call fillup before searching with
+a count so large that match results beyond count bytes are
+irrelevant.
+
+NOOP if io <:IO{Nothing} or io.ioread==false
 """
 fillup(io::IOShared{Nothing},count::UInt32) = nothing
 
 function fillup(io::IOShared{T}, count::UInt32) where T <: IO
-    if io.ioread 
+    if io.ioread && io.writeofs-io.readofs < count
+        count -=  io.writeofs-io.readofs # what is additionally requested 
         avail = min(bytesavailable(io.io), typemax(UInt32)) % UInt32
         count > avail && (count = avail)
         # count is now fill request, reduced if less is available
@@ -513,7 +554,8 @@ function Base.flush(io::IOShared{T}) where T <: MaybeIO
 end
 
 
-Base.copy(b::IOShared{Nothing}) = IOShared(b)
+"return a new IOBuffer with same (shared) contents, but no mark, default preferredlimit"
+Base.copy(b::IOShared{Nothing}) = IOShared(io.readofs,usize(io),_share(io,io.limit))
 
 
 
@@ -546,17 +588,17 @@ put contents of a token into a pool and return a token of the
 same content and type. Noop if content is already in pool or
 a direct coded in flytoken. 
 
-If locate is true, a search for the contents in pool is performed,
+If pool.locateOnPut is true, a search for the contents in pool is performed,
 found contents is referenced. This can reduce memory consumption 
-but increases CPU use.
+but increases CPU use. Default is false, change it with put(pool,true)
 
 """
-function put(pool::IOShared, t::ParameterizedToken{FLY}, locate::Bool = false) where FLY <:FlyToken
+function put(pool::IOShared{Nothing}, t::ParameterizedToken{FLY}) where FLY <:FlyToken
     isdirect(t) && return t # nothing to do on DirectToken
     t.buffer === pool.buffer && return t # nothing to do on already pooled content
     size = usize(t)%UInt32
     ofs = typemax(UInt32)
-    if locate
+    if pool.locateOnPut
         ofs = locate(pool,offset(t),size,t.buffer)
     end
     if ofs ==typemax(UInt32)
@@ -565,7 +607,12 @@ function put(pool::IOShared, t::ParameterizedToken{FLY}, locate::Bool = false) w
         ofs = pool.writeofs
         write(pool,offset(t),size,t.buffer)
     end
-    @inbounds ParameterizedToken{FLY}((t.fly & !OFFSET_BITS) | ofs,_share(pool,ofs+size%UInt32))
+    @inbounds ParameterizedToken{FLY}((t.fly & !OFFSET_BITS) + ofs,_share(pool,ofs+size))
+end
+
+"set pool.locateOnPut for subsequent put calls"
+function put(pool::IOShared{Nothing}, locateOnPut::Bool) 
+    pool.locateOnPut = locateOnPut
 end
 
 
@@ -627,6 +674,9 @@ function Base.read(io::IOShared, ::Type{SubString}, size::UInt64)
     @inbounds return substring(ofs,size,_share(io,io.readofs))
 end
 
+"read all content in buffer as a SubString (no fillUp!)"
+Base.read(io::IOShared, ::Type{SubString}) = read(io,usize(io))
+
 
 function Base.read(from::IOShared, T::Union{Type{Int16},Type{UInt16},Type{Int32},Type{UInt32},Type{Int64},Type{UInt64},Type{Int128},Type{UInt128},Type{Float16},Type{Float32},Type{Float64}})
     nb = sizeof(T)
@@ -662,6 +712,8 @@ function Base.read(from::IOShared, ::Type{UInt8})
     return ret
 end
 
+
+#= inherit it from IO!
 function Base.readbytes!(src::IOShared, b::Vector{UInt8}, count=length(b))
     # resize if necessary
     size = min(count, bytesavailable(src))
@@ -671,7 +723,7 @@ function Base.readbytes!(src::IOShared, b::Vector{UInt8}, count=length(b))
     unsafe_read(src,pointer(b),size)
     return size
 end
-
+=#
 
 ## write functions
 
@@ -696,7 +748,16 @@ end
 
 
 "write all available bytes (no waiting for async streams)"
-Base.write(to::IOShared, from::IO) = write(to,read(from))
+function Base.write(to::IOShared, from::IO)
+    # would work, but allocates intermediate Vecior #  = write(to,read(from))
+    b = to.buffer
+    size = UInt32(bytesavailable(from))
+    ensure_writeable(to,size)
+    GC.@preserve b unsafe_read(from,to.ptr+to.writeofs,size)
+    to.writeofs += size
+    return nothing
+end
+
 
 "write all available bytes in from's buffer (no fillup)"
 function Base.write(to::IOShared, from::IOShared) 
@@ -759,25 +820,28 @@ function Base.seekend(io::IOShared)
     return io
 end
 
+
 function Base.mark(io::IOShared)
     io.mark = io.readofs
 end
 
-Base.ismarked(io::IOShared) = io.mark != typemax(UInt32)
+
+Base.ismarked(io::IOShared) = io.mark != NOMARK
 
 
 function Base.unmark(io::IOShared)
     ret = ismarked(io)
-    io.mark = typemax(UInt32)
+    io.mark = NOMARK
     return ret
 end
 
 
 function Base.reset(io::IOShared)
-    io.mark == typemax(UInt32) && error("IOShared is not marked")
+    io.mark == NOMARK && error("IOShared is not marked")
     io.readofs = io.mark
+    io.mark = NOMARK
+    return io.readofs
 end
-
 
 
 """
@@ -786,6 +850,9 @@ end
 Seek operation for write position. truncate can move write position behind 
 current write position, this is equivalent to writing 0x00 bytes such that 
 write position becomes n.
+
+If the new write position is smaller than the mark position, 
+mark position is removed.
 
 n is a 0-based offset. It is declared Integer to be compatible with 
 the method signature in Base, value must be unsigned.
@@ -800,10 +867,13 @@ function Base.truncate(io::IOShared{Nothing}, n::Integer)
         end
     end
     io.writeofs = pos
+    io.readofs>io.writeofs && io.readofs = io.writeofs
+    io.writeofs < io.mark && io.mark != NOMARK && unmark(io)
     return io
 end
 
 
+"lookahead 1 byte"
 function Base.peek(from::IOShared)
     ensure_readable(from,1)
     b = from.buffer
@@ -816,7 +886,7 @@ function Base.peek(from::IOShared)
 end
 
 
-"read bytes as a shared substring"
+"lookahead n bytes, returned as a shared substring"
 function Base.peek(io::IOShared, size::UInt64)
     ensure_readable(io,size)
     # reference string data in IOShared instance

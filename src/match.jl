@@ -130,7 +130,7 @@ Base.match(r::Matcher, io::IOShared) = match(r,io,1)
 
 
 function Base.match(r::Matcher, s::SubString{String}, start::Int, last::Int) 
-    @boundscheck checkrange(last,1,ncodeunits(s))
+    @boundscheck checkrange(s,start,last)
     match(r,s.string,start+s.offset,last+s.offset)
     r.found > 0 && r.found -= s.offset
     return r
@@ -138,7 +138,7 @@ end
 
 
 function Base.match(r::Matcher, s::ParameterizedToken, start::Int, last::Int) 
-    @boundscheck checkrange(last,1,ncodeunits(s))
+    @boundscheck checkrange(s,start,last)
     match(r,s.buffer,start+offset(s),last+offset(s))
     r.found > 0 && r.found -= offset(s)
     return r
