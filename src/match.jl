@@ -67,7 +67,7 @@ It consists of
 
  * a 'compiled' pattern structure (specific to an associated pattern matching algorithmn)
  
- * result of the last match attempt (match position, matched pattern parameters)
+ * result of the last match attempt (match position, match szie, matched pattern parameters)
   
 A Matcher is not thread-safe, it should be constructed and used in one thread only.
 
@@ -77,13 +77,42 @@ string search, which does all search algorithm setup in every call, a Matcher
 separates match initialization from the 'match kernel', which is some loop 
 over the positions in the string to search in.
 
-The matching algorithm is implemented in the [`Base.match`](@ref) function, 
-with the 1st parameter typed Matcher. All search variants like findfirst, findnext,
-occursin, startswith, endswith are specialized match calls.
+The matching algorithm is implemented in the [`Base.match`](@ref) function, which
+returns a match result object, and has a matcher as its first parameter.
+All Matchers implemented in package Tokens return itself.
 
-Every concrete Matcher type must have a field named found of type Int. On return from a
-call like match(needle,haystack, ...), needle.found is 0 (not matched)
-or the 1-based index into haystack where the first match begins. 
+
+
+All search variants like findfirst, findnext, occursin, startswith, endswith and match
+variants with several type varations on where to search are all mapped on the central
+method
+
+    Base.match(m::Matcher,ofs::UInt32, size::UInt64, s::String)
+
+This is the only function (besides constructors) all matchers must implement.
+Several signature variants are mapped with generic methods onto that central method.
+This holds for Base.AbstractString, and AbstractToken and IOShared of this module.
+
+
+Every concrete Matcher type must have the following properties:
+
+* a field (or property) *found*::Int which is set by a match call.
+  found==0 indicates no match. found>0 gives the position of the match as an 1-based index.
+
+
+* a field (or property) *length*::Int which is set if found>0. It gives the length
+  of the match in bytes.
+
+
+ * a field (or property) *variant*::Int which is set if found>0. It contains an ID 
+   which identifies the pattern variant which matched. In the case of a Matcher which 
+   has multiple patterns, it is an index into the pattern list. 
+
+
+Every concrete Matcher type must have a property "found" which is set by a match call.
+found==0 indicates no match. found>0 gives the position of the match as an 1-based index.
+
+
 
 """
 abstract type Matcher 
@@ -110,49 +139,31 @@ end
 #[19] occursin(r::Matcher, s::AbstractString; offset)
 #[20] show(io::IO, re::Matcher)
 
-Base.match(r::Matcher, s::AbstractString, start::Int) = match(r,s,start,ncodeunits(s))
 
-Base.match(r::Matcher, s::AbstractString) = match(r,s,1)
+Base.match(r::Matcher, s) = match(r,s,firstindex(s))
 
-Base.match(r::Matcher, s::AbstractString, start::Int,last::Int) = match(r,string(s),start,last)
-
-
-Base.match(r::Matcher, s::Utf8String, start::Int) = match(r,s,start,ncodeunits(s))
-
-Base.match(r::Matcher, s::Utf8String) = match(r,s,1)
-
-Base.match(r::Matcher, io::IOShared, start::Int) = match(r,io,start,usize(io)%Int)
-
-Base.match(r::Matcher, io::IOShared) = match(r,io,1)
+# no. horrible because makes a copy ...
+#Base.match(r::Matcher, s::AbstractString, start::Int) = match(r,string(s),start-firstindex(s)+1)
 
 
-
-
-
-function Base.match(r::Matcher, s::SubString{String}, start::Int, last::Int) 
-    @boundscheck checkrange(s,start,last)
-    match(r,s.string,start+s.offset,last+s.offset)
-    r.found > 0 && r.found -= s.offset
+function Base.match(r::Matcher, s::Utf8String, start::Int) 
+    ss = substring(s)
+    @boundscheck(ss,start)
+    match(r,UInt32(start-1+ss.offset),usize(ss),ss.string)
+    r.found > 0 && r.found -= offset(ss)
     return r
-end
+}
 
 
-function Base.match(r::Matcher, s::ParameterizedToken, start::Int, last::Int) 
+function Base.match(r::Matcher, s::BToken, start::Int) 
     @boundscheck checkrange(s,start,last)
-    match(r,s.buffer,start+offset(s),last+offset(s))
+    match(r,start-1+offset(s),usize(s),s.buffer)
     r.found > 0 && r.found -= offset(s)
     return r
 end
 
 
-
-
-"Match in current buffer content, no fillup! "
-function Base.match(r::Matcher, s::IOShared, start::Int, last::Int) 
-    match(r,s.buffer,start+s.readofs,last+s.readofs)
-    r.found > 0 && r.found -= s.readofs
-    return r
-end
+Base.match(r::Matcher, s::AbstractToken, start::Int) = match(r,BToken(s),start)
 
 
 
@@ -163,15 +174,16 @@ Algorithm is very similar to that used for string search in Julia Base.
 Little initialization overhead, very fast, but no pattern flexibility.
 """
 mutable struct ExactMatcher <: Matcher
-  pattern :: String # pattern must match all bytes
+  pattern :: BToken # pattern must match all bytes
   bloommask :: UInt64 # ORed byte hashes 
   lastskip :: Int # bytes to skip if last byte matches but another byte does not 
   bloomskip :: Int # bytes to skip if a byte-s hash is not in bloommask
   found :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
   last :: Uint8 # last byte of pattern
-  function ExactMatcher(pattern::String)
-    matcher = new(pattern,0%UInt64,0,0,0,0x00)
+  function ExactMatcher(pattern::AbstractString)
+    matcher = new(BToken(pattern),0%UInt64,0,0,0,0x00)
     initialize!(matcher)
+    return matcher
   end
 end
 
@@ -179,8 +191,9 @@ end
 bloomhash(b::UInt8) = UInt64(1) << (b & 0x3f)
 
 
-function initialize(em::ExactMatcher)
-    p = e.pattern
+"can be used to re-initialize after assigning a new pattern"
+function initialize!(em::ExactMatcher)
+    p = em.pattern
     n = ncodeunits(p)
     # n <= 1 && error("ExactMatcher requires a pattern size of at least 2")
     skip = n
@@ -216,9 +229,9 @@ function initialize(em::ExactMatcher)
         end
     end
     skip -= 1 # add 1 to skip in main loop
-    e.bloommask = bloom_mask
-    e.bloomskip = bloom_skip
-    e.lastskip = skip
+    em.bloommask = bloom_mask
+    em.bloomskip = bloom_skip
+    em.lastskip = skip
 end
 
 
@@ -232,11 +245,11 @@ end
     boundscheck will ensure valid sfirst, slast are existing index values
 
 """
-function match(matcher::ExactMatcher,s::String, sfirst::Int, slast::Int )
+function match(matcher::ExactMatcher,ofs::UInt32,size::UInt64, s::String)
     n = ncodeunits(matcher.pattern)
     @boundscheck sfirst <1 && sfirst = 1
     @boundscheck slast > ncodeunits(s) && slast = ncodeunits(s)
-    m = slast-sfirst+1
+    m = size%Int
     matcher.found = 0 # assign default value "not found"
     if n<=1
         # special trivial case: switch to byte search or nothing to search
@@ -304,4 +317,115 @@ function match(matcher::ExactMatcher,s::String, sfirst::Int, slast::Int )
     return matcher
 end
 
+
+
+"""
+Search for any byte from a given list. 
+
+"""
+mutable struct AnyByteMatcher <: Matcher
+    pattern :: Vector{UInt8} # pattern matches any of its bytes
+    ismatch ::  Vector{UInt8} # 0 or index into pattern. index is 1+(byte value to test)
+    found :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
+    variant :: Uint32 # index into pattern for match
+    function AnyByteMatcher(pattern::Vector{UInt8})
+        ismatch =  Vector{UInt8}(0%UInt8,256)
+        for i in 1::length(pattern)
+            ismatch[pattern[i]+1] = i
+        end
+        new(pattern,ismatch,0,0)
+    end
+end
+
+
+function match(matcher::AnyByteMatcher,s::String, sfirst::Int, slast::Int)
+    @boundscheck checkrange(s,sfirst,slast)
+    @inbounds begin
+        while sfirst <= slast
+            test = ismatch[codeunit(s,sfirst)]
+            if test> 0
+                matcher.found = sfirst
+                matcher.variant = test
+                return matcher
+            end
+        end
+        matcher.found = 0
+        return matcher
+    end
+end
+
+
+
+
+"""
+Search for any string from a given list. 
+
+Works best with long strings to match (shortest length determines performance).
+
+Matcher uses a list of patterns, given as Token Vector. 
+Pattern processing depends on token category:
+
+ * T_TEXT: pattern is an exact string match
+
+ * T_CHAR: pattern accepts lowercase and uppercase for every ASCII letter
+   (does not apply to unicode letters beyond ASCII range)
+
+ * T_STRUCT: for each byte position, a list of allowed byte values is specified. 
+   
+   All byte values in the pattern are treatet as exact match, except '^' which acts as
+   escape for a nonexact match. UTF8 encoded non-ASCII characters are allowed and are treated as an exact match .
+    
+   The byte following a '^' specifies the type of match:
+    
+    * ^^ exact match for '^'
+
+    * ^? any byte value
+
+    * ^% any ASCII digit (0..9)
+
+    * ^&  any ASCII letter
+    
+    * ^l any lower case ASCII letter
+    
+    * ^U any upper case ASCII letter
+    
+    * ^x?? a byte value specified in hexadecimal notation with two ASCII hex characters
+    * ^b???????? a byte value specified in binary notation with eight ASCII digits
+
+    * ^[list] list is an ASCII character list, non-ASCII bytes are specified by one of
+      the preceding escape notations 
+
+
+
+
+"""
+mutable struct AnyStringMatcher <: Matcher
+    pattern :: Vector{UInt8} # pattern matches any of its bytes
+    ismatch ::  Vector{UInt8} # 0 or index into pattern. index is 1+(byte value to test)
+    found :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
+    variant :: Uint32 # index into pattern for match
+    function AnyStringMatcher(pattern::BTokenVector)
+        error("not yet implemented")
+    end
+end
+
+AnyStringMatcher(pattern:T ) where T <: Union{AbstractVector{AbstractString}} = AnyStringMatcher(BTokenVector(pattern))
+
+#=
+function match(matcher::AnyStringMatcher,s::String, sfirst::Int, slast::Int )
+    @boundscheck checkrange(s,sfirst,slast)
+    @inbounds begin
+        while sfirst <= slast
+            test = ismatch[codeunit(s,sfirst)]
+            if test> 0
+                matcher.found = sfirst
+                matcher.variant = test
+                return matcher
+            end
+        end
+        matcher.found = 0
+        return matcher
+    end
+end
+=#
 

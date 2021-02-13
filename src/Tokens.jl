@@ -17,8 +17,12 @@ export DirectFly
 
 include("token.jl")
 export Token, BToken
+
+include("match.jl")
+
+
 include("ioshared.jl")
-export IOShared,modify!,
+export IOShared,modify!
 #using TreeOnVectors
 include("tokenvector.jl")
 export TokenVector, TokenTree

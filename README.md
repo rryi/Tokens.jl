@@ -7,24 +7,27 @@
 [![Codecov](https://codecov.io/gh/rryi/Tokens.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/rryi/Tokens.jl)
 [![Build Status](https://api.cirrus-ci.com/github/rryi/Tokens.jl.svg)](https://cirrus-ci.com/github/rryi/Tokens.jl)
 
-Tokens.jl supplies tools to parse text into tokens, build memory-efficient vectors and trees of tokens, and work with mutable strings. It uses shared buffers, avoiding heap allocations for single tokens and tree elements.
+Tokens.jl supplies tools to work with small text fragments like those produced by a lexer stage during source code processing of computer languages. 
+A lexer segments source text into "tokens", usually short sequences which are classified e.g. into identifiers, numbers, whitespace and so forth.
+A token in the context of Tokens.jl consists of a category ID (enumeration with 16 predefined values) and a string. 
 
-Inspirations came from Nicholas Ormrod's talk on [strange details of std::string at Facebook](https://www.youtube.com/watch?v=kPR8h4-qZdk), and  [ShortStrings](https://github.com/xiaodaigh/ShortStrings.jl) for interned strings. 
+Design guidelines are memory and runtime efficiency, in particular for very short strings. Strings with up to 7 code units can be stored directly
+in a minimal token structure of 8 bytes, tokens with longer strings use a separate buffer. A token vector uses one common buffer for all elements,
+avoiding heap allocations per token creation.
+
+Inspirations came from Nicholas Ormrod's talk on [strange details of std::string at Facebook](https://www.youtube.com/watch?v=kPR8h4-qZdk), 
+[ShortStrings](https://github.com/xiaodaigh/ShortStrings.jl) for interned strings, and 
+[WeakRefStrings](https://github.com/JuliaData/WeakRefStrings.jl) for string arrays using a shared content buffer.
 
 # Basic structures
 
 ## AbstractToken <: AbstractString
-A string with additionally attached token category (a value in 0..7). See token interface chapter.
+A string with additionally attached token category. See token interface chapter.
 
-## TinyToken <: AbstractToken
-A token flyweight, of only 8 bytes. It consists of a token category (a value between 0 and 7) and text, either stored directly in the remaining 7 bytes, or stored in some external buffer.
+## FlyToken <: AbstractToken
+A token flyweight, of only 8 bytes. It consists of a token category (a value between 0 and 15), string length in code units, and either an offset into a content buffer or directly stored code units for up to 7 code units.
 
 ## Token <: AbstractToken
-holds a category ID  of non-heap storage
-. aims on  It also covers mutable strings general string processing tasks and a mutable string dwith mutable  and mutable strings.
-
-A token is a text fragment recognized to be of some token category. . perform string manipulation do string manipulation.
-
-ext fragments structures for parsing and manipulating text fragments which can have a category attached# Intention
+A FlyToken plus a content buffer reference as a struct. The variant BToken uses always the content buffer, even for strings with less than 8 code units.
 
 # AbstractToken interface

@@ -1,4 +1,19 @@
+"""
+substring(source)
 
+converts to a SubString{String}, trying to use an internal
+string buffer. Works without content copying on Utf8String and IOShared objects
+
+substring is intended to be used with (offset,size,source) tuples as argument on
+byte buffers, not the String-oriented (source,firstIndex,lastIndex) notation introduced in
+julia Base for AbstractString sources.
+
+    
+However, in all cases, UTF8 validity is checked (that is built into SubString constructor).
+Only use substring for Utf8 string processing!!
+
+"""
+function substring end
 
 
 "These string types have methods operating with Utf8 code units"
@@ -7,27 +22,22 @@ const Utf8String = Union{String,SubString{String},AbstractToken}
 "an empty string buffer"
 const EMPTYSTRING = ""
 
+usize(s::Utf8String) = ncodeunits(s)%UInt64
 
-"fast SubString construction using offset and size, without validation of UTF8 content validity"
+
+"fast SubString construction using offset and size in bytes, with check of UTF8 content validity"
 Base.@propagate_inbounds function Base.SubString{String}(ofs::UInt32, size::UInt64,s::String)
     @boundscheck checksize(ofs+size,ncodeunits(s))
-    return @inbounds SubString(s,ofs+1,(ofs+size)%Int)
+    return @inbounds SubString(s,ofs+1,thisind(s,(ofs+size)%Int))
 end
-
-
-"""
-    substring(source)
-
-converts to a SubString{String}, trying to use an internal
-string buffer. Works without content copying on Utf8String and IOBuffer objects
-
-"""
-function substring end
 
 
 substring(s::String,first::Integer,last::Integer) = SubString(s,first,last)
 
-Base.@propagate_inbounds substring(s::AbstractString,first::Integer,last::Integer) = substring((first-1)%UInt32,(last-(first-1))%UInt64,s)
+"expensive default (converts to String!)"
+Base.@propagate_inbounds substring(s::AbstractString,first::Integer,last::Integer) = substring(string(s[first:last]))
+
+Base.@propagate_inbounds substring(s::AbstractString,first::Integer) = substring(s,first, lastind(s))
 
 Base.@propagate_inbounds substring(offset::UInt32, size::UInt64, s::AbstractString) = SubString(offset,size,string(s))
 
@@ -63,3 +73,9 @@ end
 
 
 
+"codeunit with offset (aka 0-based index)"
+@inline function byte(s::String, ofs::UInt32)
+    @boundscheck checkbyteofs(ofs,ncodeunits(s))
+    b = GC.@preserve s unsafe_load(pointer(s)+ofs))
+    return b
+end

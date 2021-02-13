@@ -1,8 +1,5 @@
 
 ## basic type declarations and utilities
-
-
-
 """
 A categorized string, supertype of all token types in this module.
 
@@ -14,8 +11,25 @@ They are defined as enum type [`TCategory`](@ref), designed to be used in
 lexers and parsers.
 
 For comparisons and hashing, tokens are treated as strings. Two tokens with
-identical content but different category are treated equal and have the
+equal content but different category are treated equal and have the
 same hash value.
+
+# Missing and Nothing support
+
+Missing/Nothing support is already built into all AbstractToken subtypes: 
+they have an internal encoding for missing and nothing, and all concrete subtypes
+must have a constructor with one parameter of type Missing resp. Nothing,
+which construct a token with that encoding.
+ismissing(t::AbstractToken) and isnothing(t::AbstractToken) will return true
+for these encodings. 
+
+This is sufficient for applications which do all tests with ismissing
+and isnothing functions. However comparison operators are not overloaded, so t===nothing
+will give false for these encodings. For vectors of tokens, you can explicitly specify
+a subtype of Union{Token,Missing,Nothing} for element types, enabling explicit
+missing and/or nothing values on array read access (internal encodings are 
+converted to missing or nothing).
+
 
 # interface requirements
 
@@ -42,52 +56,33 @@ advantages by better CPU cache use.
 unit buffer. Tokens can share the same buffer, reducing overhead for heap
 management and even re-use content, like SubString does.
 
-There is a technical size limit for tokens of 2^27-1 code units.
+There is a technical size limit for tokens: at most 2^27-1 code units.
 It applies to *all* AbstractToken implementations. It might restrict usage in
 some general text processing tasks, eg processing huge log files.
 Recommended countermeasure is processing chunks of some KByte to MByte,
 using [`IOShared`](@ref). Tokenizing a text, usually leads to small fragments
 of a couple of bytes. For tokens in the sense of "atoms of text", a size in
 the range of a couple of bytes is expected. Text written by humans, like
-source code and bublished books, has sizes up to some MByte.
+source code and published books, has sizes up to some MByte.
 
-[`Token`](@ref) is the combination of DirectFly and BToken in
-one type.
+[`HToken`](@ref) is a combination of DirectFly and BToken in
+one type, using no buffer for code unit counts below 8.
 
-# further types and APIs in this package
+# related types and APIs in this module
 
-[`IOShared`](@ref) is simular to IOBuffer but desighned to interact smoothly
+[`IOShared`](@ref) is simular to IOBuffer but designed to interact smoothly
 with tokens. Though mutable, its buffer can safely be shared with tokens
 (as well as SubString instances).
 
-[`TokenVector`](@ref) acts as vector of tokens. It uses one shared buffer for
+[`TokenVector`](@ref) acts as vector of tokens, using one shared buffer for
 all vector elements. It uses significantly less memory than a Vector{String},
 but might require copying token contents into the buffer used by the TokenVector
-when a token is put into the vector.
-on putting
-Storing a (buffer based) token in a TokenVector requires copying token contents
-into the buffer used by the TokenVector - except it is already used by the Token.
-In many applications, all token operations can work on one large buffer,
-eliminating contents copies when storing tokens into a TokenVector.can be expensiveIn many parsing scenarios, it is possible to most tokens stem from the same source. By having a
-IOShared instance can In scenarios where all tokens come from a shared IOShared,  and
+when a token is put into the vector. 
 
-FlyToken is the abstract super type of the types presented above, subtypes
-are 64bit flyweight token values. They are used directly in situations where
-no buffer is needed or known from context.
-See [`TokenVector`](@ref) as an example.
+[`TokenTree`](@ref) implements a simple tree structure upon a TokenVector. 
 
-[`PToken`](@ref) bundles a FlyToken with a buffer, [`Token`](@ref) is PToken
-using a HybridFly and the recommended immutable token type for general use.
-PToken is quite similar to [`SubString`](@ref), with reduced maximal length
-in favor of a category field.
-
-[`MutableToken`](@ref) implements safe content changes without buffer
-reallocation. It tracks references to its buffer, changes in a buffer
-segment referenced elsewere cause buffer reallocation. Its logic is
-also used in [`TokenVector`](@ref) which implements a token array
-using one common buffer.
-
-
+[`Lexer`](@ref) implementations have functions for lexical analysis and 
+tokenizing of text into tokens
 """
 abstract type AbstractToken <: AbstractString
 end
@@ -140,97 +135,124 @@ end
 """
 Token category definitions
 
-These token categories describe the semantics of token lexer in this package.
-They might fit well for other use cases, but feel free to use the catetory
-4-bit-field for any purpose in other applications. 
+These token categories describe the general semantics of token categories,
+as used in package Token. Applications can redefine the meaning of categories 
+within their own context - guidelines are given below.
 
-# group (1): character sequences based on character classes
+
+# group (1): character sequences with fixed character class for 1st and subsequent characters
 
 ## T_WHITE = 0
 
 A sequence of whitespace characters.
-May include end of line characters, if *T_EOL* is not used in a
-certain lexer context.
+May include end of line characters, if *T_EOL* is not used.
 
 ## T_IDENT = 1
 
 An identifier in the lexer context.
+
 Typical rules are: 1st character is a letter, following characters are
 letters or digits. Some special characters like '_' could also
-appear in a T_IDENT token.
+appear in a T_IDENT token. 
+
+Lexers working on byte level might treat all Non-ASCII unicode characters
+either as letter or as non-letter. 
 
 ## T_SPECIAL = 2
 
-A sequence of special characters, which are not used as delimiters of
-other lexical construct like quotes, and not recognized as symbol.
+A sequence of special characters, which is not used as delimiter of
+another lexical construct like quotes, and not recognized as symbol.
+Lexers decide to report each special character as its own token, or
+report a contiguous sequence of special characters as one token.
+
+A token t with category T_SPECIAL and empty content is treated as
+undefined value, i.e. isnothing(t) returns true. Lexers can return
+such a token on an attempt to read beyond end of data.
 
 ## T_INT = 3
 
-A sequence of digits, may have leading sign. usually '+' or '-', but a lexer
-can recognize other characters as a sign
+A sequence of digits. Lexers can allow a leading sign, like '+' or '-'.
 
+Token constructors with an Integer argument create a token of category 
+T_INT and its decimal string representation as content.
 
-# group (2): lexer categories determined by 1st code unit
+# group (2): lexer categories determined by 1st character
 
 ## T_QUOTED = 4
 
 A string enclosed in double quotes '"'. Lexers will typically remove the leading
-and trailing quotes, and will not allow double quotes inside. However,
-there are lexer implementations which support some escape mechanism which
-allows putting double quotes in a quoted string.
+and trailing quotes. Lexers can recognize escape rules, which allow to embed 
+double quotes within the string. Typical rules are doubling quotes inside,
+or escape prefixes like "\". 
 
 ## T_CHAR = 5
 
-A string enclosed in single quotes. Some lexer will require exactly one
-character.
+Character token. Token content is usually one Utf8-coded character.
+Typical lexers recognize a string enclosed in single quotes as category T_CHAR,
+and will usually remove the leading and trailing quotes.
+
+Token constructors with a Char argument create a token of category 
+T_CHAR and its Utf8 string representation as content.
 
 ## T_EOL = 6
+
 End of line sequence, 1 or 2 characters, typically a FlyToken.
 In a context where line breaks have no syntactical meaning, a lexer can
 treat end of line characters as whitespace and never report T_EOL.
 
-# group (3): tokens which specialize or extend tokens from group 1-3
 
-## T_FLOAT = 7
+# group (3): more complex lexer tokens
 
-An optionally signed number with a decimal separator and/or decimal exponent
+## T_REAL = 7
+
+An optionally signed number with a decimal separator and/or decimal exponent.
+
+Token constructors with a Real argument create a token of category 
+T_REAL and its Utf8 string representation as content.
+
 
 ## T_COMMENT = 8
 
-comment. Contains the pure comment text, not its delimiters.
-Delimitersmay be accessible via lexer context"
+comment. Typically contains the pure comment text, without delimiters.
+Delimiters may be accessible via lexer context. Many computer languages support
+different comment flavours like inline, rest of line or multiline comments.
+
+
+# group (4): higher level categories, mostly used in parsers and TokenTree
 
 ## T_TEXT = 9
 
-Some text without defined lexical or semantic properties.
+Some text which was not (fully) tokenized according to the preceding token categories.
 This is the default category for tokens used in general string processing.
+Example: text entities in XML. 
 
-In a lexer context it is recommended for text which is excluded from lexical
-analysis, e. g. if some escape sequence is found. The escape sequence can
-be reported as preceding token (this requires the lexer to maintain ins state
-as 'in escape mode'), or as token which can be accessed just after parsing
-this token.
-
-
-# group (4): categories used in parsers and TokenTree, not defined lexically
+A token constructor with a single AbstractString argument (which is no token)
+creates a token of category T_TEXT.
 
 
 ## T_END = 10
 
 End of some token sequence. It may contain a string, e. g. the end of a node
-in XML, or may be an empty token, e. g. if reported by the lexer on an
-attempt to parse beyond end of data.
+in XML, or may be an empty token. In many grammars, T_END tokens have a lexical
+representation and could be identified by a lexer. Common examples are tokens like
+"end", ")", "}", "]", ";". But the end of a semantical sequence can also be 
+defined by context data, like indentation level, or operator precedence rules,
+which have no lexical characterization. In such cases, T_END tokens are inserted 
+by the parser.
 
-In a TokenTree, for each token having of one of the following
+In a  [`TokenTree`](@ref), for each token having of one of the following
 categories, there must be a T_END Token to close the sequence of its
 children.
+
+An empty T_END token could be returned by lexers if an attempt is made to read
+beyond end of data.
 
 ## T_SYMBOL = 11
 
 One or more special characters which form a semantically interpreted
 symbol, e.g. "*", ">>>" or "+=". A lexer may accept different notations for the
 same symbol, e. g. "<>", "!=" and "≠" for inequality,
-and may replace different notations by one of the others.
+and may return a normalized notation.
 
 Symbols usually fit into a DirectFly. Consider to grant this in your
 application (and use DirectFly for symbols).
@@ -238,13 +260,19 @@ application (and use DirectFly for symbols).
 In TokenTree, symbols can have children, to reflect the use of symbols
 as operators in common computer languages.
 
+A token t of category T_SYMBOL and empty content is regarded a missing
+value, i.e. ismissing(t) returns true.
+
+
 ## T_KEY = 12
 
 Identifier recognized as keyword, typically a FlyToken. Lexers may support
-different nonations for a keyword, and return a 'canonical' representation,
+different nonations for a keyword, and return a unique 'canonical' representation,
 e. g. converting SQL keywords to uppercase. If all T_KEY strings have a
 canonical representation with less than 8 code units, your application could
-restrict T_KEY tokens to type DirectFly.
+restrict T_KEY tokens to type DirectFly. Even if the grammar has longer keywords,
+you can define a short form fitting into a DirectFly as canonical representation,
+and restrict T_KEY tokens to DirectFly.
 
 Reserved words in programming languages are usually tokenized as T_KEY.
 In a TokenTree, they can have children, e. g. condition and action for
@@ -252,40 +280,50 @@ control structures like IF/THEN/ELSE or FUNCTION parameters and code.
 
 ## T_PI = 13
 
-processing instruction. In a TokenTree, its children represent the parsed
-content of the instruction.
+processing instruction. In a TokenTree, it may have children which represent 
+the parsed content of the instruction.
 
 A lexer will typically identify a processing instruction by some unique prefix
 and suffix, return the text between as unparsed text in a T_PI
 token, and make prefix and suffix accessible via its context.
-The caller will then parse the T_PI content (e.g. by calling another Lexer).
+It-s up to the caller to parse the T_PI content (e.g. by calling another Lexer).
 
 Examples are DTD and PI in XML, embedded javascript code in HTML,
 processing instructions in text templates like XSLT.
 
+From a lexer-s view, T_PI is structurally the same as T_TEXT: a sequence of
+unparsed content with a delimiter sequence at its begin and end, 
+which is excluded from the returned token.
+
 ## T_STRUCT = 14
 
 structure: a node in TokenTree with children.
+
 T_STRUCT is recommended if children access is based on a key attribute which
 identifies them within the children list, like a field name in a julia struct or the
 attribute name in an XML item. Often, children have different data types and
 a static list of allowed keys exists.
 
+A specialized lexer may "abuse" T_STRUCT for a lexical structure, e.g. a match 
+against a certain regular expression, like a date format.
+
 ## T_LIST = 15
 
 list: a node in TokenTree with children.
 T_LIST is recommended if children access is based on the sequence order,
-like julia vectors or JSON arrays. Often, all children have the same data type
+like julia vectors or JSON arrays. Often, all children have the same data type.
+
+A specialized lexer may "abuse" T_LIST for a lexical structure, e.g. a match
+against a certain regular expression, like a date format.
 
 # special string literals for tokens
 
 For every enum value, a special string literal syntax is defined
-to create token literals of the appropriate category and most
-efficient representation. Exampie:
+to create token literals of the appropriate category. Exampie:
 
 T_INT"123"
 
-generates a DirectFly(T_INT,"123").
+generates a Token(T_INT,"123").
 
 """
 @enum TCategory :: UInt8 begin
@@ -296,7 +334,7 @@ generates a DirectFly(T_INT,"123").
     T_QUOTED = 4
     T_CHAR = 5
     T_EOL = 6
-    T_FLOAT = 7
+    T_REAL = 7
     T_COMMENT = 8
     T_TEXT = 9
     T_END = 10
@@ -305,21 +343,6 @@ generates a DirectFly(T_INT,"123").
     T_PI = 13
     T_STRUCT = 14
     T_LIST = 15
-end
-
-# Generation of the string literal macros for tokens
-for cat in instances(TCategory)
-    eval(quote
-        macro $(Symbol(Symbol(cat),"_str"))(txt)
-            if ncodeunits(txt)>7
-                :(BToken($($(cat)),$txt))
-            else
-                :(DirectFly($($(cat)),$txt))
-            end
-        end
-        export $(Symbol(cat))
-        export @$(Symbol(Symbol(cat),"_str"))
-    end)
 end
 
 
@@ -425,13 +448,29 @@ Functions ncodeunits and sizeof are derived from usize
 """
 function usize end
 
-usize(s::AbstractString) = ncodeunits(s)%UInt64
+"""
+returns the category of a token
+"""
+function category end
+
+
 
 ## AbstractString API implementations which need no specialization
 
 Base.codeunit(t::AbstractToken) = UInt8
 
 Base.ncodeunits(t::AbstractToken) = usize(t)%Int
+
+
+
+## special values for missing and nothing
+
+"AbstractToken uses category T_SYMBOL with usize 0 as encoding for missing"
+Base.ismissing(t::AbstractToken) = category(t)==T_SYMBOL && usize(t)==0%UInt64
+
+"AbstractToken uses category T_SPECIAL with usize 0 as encoding for nothing"
+Base.isnothing(t::AbstractToken) = category(t)==T_SPECIAL && usize(t)==0%UInt64
+
 
 
 #das stimmt so nicht!

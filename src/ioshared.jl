@@ -12,92 +12,114 @@ const DEFAULTLIMIT = 1024%UInt32
 "value indicating no mark ist set"
 const NOMARK =typemax(UInt32)
 
+"value indicating no mark ist set"
+const NOMARK =typemax(UInt32)
+
 
 """
-IO buffer which can share content with SubString and AbstractToken instances.
+IO buffer which can share content with SubString and Token instances.
 
 Reading of tokens or substrings can be done without heap allocations - 
 such returned items simply share the internal buffer, IOShare instance 
 will "copy on write" to protect shared data.
 
-IOShared comes in three flavours:
+An IOShared instance operates in one of the following, mutually exclusive, modes:
 
- * IOShared{Nothing}: closely resembles IOBuffer with some additional 
- text processing methods giving a "mutable string" behavior, readableand writable
+1) *IO queue:* like IOBuffer, readable and writable. with some additional 
+text processing methods giving a "mutable string" behavior.
 
- * IOShared{T<:IO}, ioread: buffered input stream.
- readable but not writeable, internal buffer is filled from a data source
- attached by constructor.
+2) *buffered input stream:* a data source (another IO instance) is attached.
+ When a read operation requests more bytes than available in the internal
+ buffer, data from attached source is appended, and already read content
+ is removed if not blocked by a mark. IOShared is usually only read.
+ Writing is possible, but unusual: if will effectively insert data into the
+ input stream at the current write offset position, which is under control 
+ of IOShare. More realistic is insertion at the read position, e.g. to 
+ replace some include notation by the content to include.
+
+3) *buffered output stream:* a data sink (another IO instance) is attached.
+ When a write operation requests more bytes than free space is available 
+ in the internal buffer, all content is written to attached data sink and
+ then removed if not blocked by a mark. IOShared is usually only written.
+ Read access is permitted, but will effectively delete data from the
+ output stream. Similar to 2), insert/delete operations are more relevant
+ to manipulate the stream befor it gets finally written to the sink. 
+ Use mark to ensure that content behind mark is not written to data sink,
+ but remove mark as soon as possible.
+
+4) *heap for flyweight tokens:* vectors of flyweight tokens are attached, using
+ IOShared for all of their content not directly stored in the flyweight. 
+ IOBuffer is neither readable nor writeable in the usual IO sense.
+ Token contents get into IOShared with the [`put`](@ref) function, which
+ ensures that offsets of all registered flyweight tokens remain valid. 
+ Internal reorganization still happens, but will adjust offsets of all 
+ registered flyweight tokens.
  
- * IOShared{T<:IO}, !ioread: buffered output stream.
- All data written go to a data sink attached by constructor when flush is called or
- if internal buffer space is exhausted.
-
-All flavours maintain two internal offsets, marking the currently valid part of the internal buffer.
+All flavours maintain two internal offsets, marking the currently used part of the internal buffer.
 One is the current read position, the other the current write position. 
 
-IOShared{Nothing} can be used as byte queue (intermittent reads and writes). 
+IOShared queues allow (intermittent reads and writes). 
 Current content is only changed by explicit content operations (read,
-write, resize and some more). Offsets, however, are also implicitly changed, 
-so do not rely on offset stability after operations.
+write, resize and some more). Offsets into content, however, can change, due
+to reorganization. Already read content (before readofs) can be removed, reducing
+offsets of remaining content.
 
-IOshared{IO} will chance buffer content implicitly: with attached data sink,
+IOshared buffered streams have only a possibly small window of the whole
+data in its internal buffer. Reading from a buffered output stream is
+tecnically possible, but will effectively delete data  the stream: read data is no more written
+to the data sink. Similarly, writing to a buffered input stream will insert
+data into the stream, which is usually not intended. it removes data before  data in data sink,
 operations can cause flushing of current content to data sink. With attached 
 data source, read operations may trigger appending data from source to 
 internal buffer. Time and size of those implicit content changes are under
 control of the IOBuffer implementation.
 
-For IOshared{IO} With attached data source, writing is technically allowed, but unusual:
-writing to a buffered input stream will effectively insert data at the current 
-write position, not at the end of input data. 
-
-Similar for IOshared{IO} with an attached data sink, reading from it is allowed 
-but will delete content before it is written to sink.
-
-You can covern implicit content changes by use of the mark mechanism: setting the
+You can govern implicit content changes by use of the mark mechanism: setting the
 mark to a content position, effectively prevents implicit content changes
 between mark position and write position.  However content before the mark
 position may get removed by implicit changes, moving all offsets.
 To also prevent this, set mark position to 0. This and only this guarantees that
 content offsets will be changed by explicit operations, only.
 """
-mutable struct IOShared{T <: MaybeIO} <: IO
-    buffer :: String # PRIVATE!! memory with byte data.
-    ptr :: Ptr{UInt8} # PRIVATE!! pointer to buffer.
+mutable struct IOShared <: IO
+    buffer :: String # PRIVATE! memory with byte data.
+    ptr :: Ptr{UInt8} # PRIVATE!!! pointer to buffer. # TODO ersetzen durch pointer call?!!!
     readofs :: UInt32 # read position offset / number of consumed bytes
     writeofs :: UInt32 # write (append) position offset / end of defined data
     shared :: UInt32 # offset in buffer behind last shared byte (0: nothing shared)
-    mark :: UInt32 # offset of data not to flush/forget. typemax(UInt32): no active mark
+    mark :: UInt32 # offset of data not to flush/forget. typemax: no active mark
     limit ::  UInt32 # total number of bytes in buffer
     preferredlimit ::  UInt32 # limit in case of reallocation due to sharing
-    io::T # nothing or if ioread: source for fillup, else target for flush
+    io::MaybeIO # nothing or if ioread: source for fillup, else target for flush
     ioread :: Bool # true: io is source for fillup. false: io is target for flush or nothing
     locateOnPut :: Bool # true: put does lookup content, share instead of append if found
-    function IOShared{T}(io::T,ioread::Bool,limit::UInt32) where T <: MaybeIO
+    registered :: Vector{HybridFly} # true: mark is always 0 (offsets are guaranteed not to change)
+    function IOShared(io::MaybeIO,ioread::Bool,limit::UInt32) 
+        ioread && io===nothing && error("ioread must be false if io is nothing")
         z = zero(UInt32)
         s = _string_n(limit)
-        new(s,pointer(s),z,z,z,NOMARK,limit,limit,io,ioread,false)
+        new(s,pointer(s),z,z,z,NOMARK,limit,limit,io,ioread,false,Vector{HybridFly}())
     end
-    function IOShared{Nothing}(offset::UInt32, size::UInt64, s::String)
+    function IOShared(offset::UInt32, size::UInt64, s::String)
         @boundscheck checkrange(offset,size,s)
         size32= UInt32(size) # check on overflow necessary: cannot handle too long strings
         preferredlimit = max(size32,DEFAULTLIMIT) # well ... just a very simple guess
         limit = UInt32(ncodeunits(s)) # check on overflow necessary: cannot handle too long strings
-        new(s,pointer(s),offset,offset+size32,limit,NOMARK,limit,preferredlimit,nothing,false,false)
+        new(s,pointer(s),offset,offset+size32,limit,NOMARK,limit,preferredlimit,nothing,false,false,Vector{HybridFly}())
     end
 end
 
-IOShared(io::T,ioread:Bool, limit::UInt32=DEFAULTLIMIT) where T <: MaybeIO = IOShared{T}(io,ioread,limit)
+IOShared(io::MaybeIO,ioread::Bool, limit::UInt32=DEFAULTLIMIT) = IOShared(io,ioread,limit)
 
 IOShared(limit::UInt32=DEFAULTLIMIT) = IOShared(nothing,false,limit)
 
-IOShared(s::SubString{String}) = IOShared{Nothing}(UInt32(s.offset),s.ncodeunits%UInt64,s.string)
+IOShared(s::SubString{String}) = IOShared(UInt32(s.offset),s.ncodeunits%UInt64,s.string)
 
-IOShared(s::String) = IOShared{Nothing}(zero(UInt32),(ncodeunits(s)%UInt64),s)
+IOShared(s::String) = IOShared(zero(UInt32),(ncodeunits(s)%UInt64),s)
 
-IOShared(t::BToken) = IOShared{Nothing}(offset(t.tiny),usize(t.tiny),t.buffer)
+IOShared(t::BToken) = IOShared(offset(t.tiny),usize(t.tiny),t.buffer)
 
-IOShared(t::Token) = IOShared(BToken(t))
+IOShared(t::AbstractString) = IOShared(BToken(t))
 
 
 
@@ -137,8 +159,10 @@ _share(io::IOShared) = _share(io,io.limit)
 
 
 "currently loaded content size in bytes. Changes e.g. on fill, flush, read, write"
-usize(io::IOShared) = (io.writeofs-io.readofs) % UInt64
+usize(io::IOShared) = usize32(io) % UInt64
 
+
+usize32(io::IOShared) = io.writeofs-io.readofs
 
 """
 move memory within a IOShared buffer: insert/delete at ofs
@@ -180,6 +204,80 @@ function _resize(io::IOShared, ofs::UInt32, resize::Int)
 end
 
 
+
+"""
+    unsafe_put(pool::IOShared, t::Token{F})
+
+
+put contents of t into pool and return a [`FlyToken`](@ref) referencing
+this IOBuffer with the same content.
+
+Is marked unsafe, because there is no share protection for the returned
+FlyToken. Method is used internally when storing in a registered [`TokenVector`](@ref),
+which does not need share protection.
+
+Use [`put`](@ref) function to get a share-protected Token back.
+
+If pool.locateOnPut is true, a search for the contents in pool is performed,
+found contents is referenced. This can reduce memory consumption 
+but increases CPU use. Default is false, change it with put(pool,true)
+"""
+function unsafe_put(pool::IOShared, t::Token{F}) where F
+    size = usize(t)%UInt32
+    ret = t.fly
+    if !isdirect(t) && size>0 && t.buffer !== pool.buffer
+        ofs = typemax(UInt32)
+        if pool.locateOnPut 
+            ofs = locate(pool,offset(t),size,t.buffer)
+        end
+        if ofs ==typemax(UInt32)
+            # not found: append data
+            ensure_writeable(pool,size)
+            ofs = pool.writeofs
+            write(pool,offset(t),size,t.buffer)
+        end
+        ret = (t.fly & !OFFSET_BITS) + ofs
+    end
+    return ret
+end
+
+
+"""
+    put(pool::IOShared, s, ::TOKEN{F})
+
+s can be anything for which a Token{F} constructor exists, 
+in particular AbstractString, AbstractToken, Real, Integer, Bool.
+
+put contents of s into pool and return a [`Token`](@ref) with the 
+same content. If s isa AbstractToken, its category is preserved, 
+for any other AbstractString type, category is set to T_TEXT.
+Noop if content is already in pool or direct coded in returned Token. 
+
+If pool.locateOnPut is true, a search for the contents in pool is performed,
+found contents is referenced. This can reduce memory consumption 
+but increases CPU use. Default is false, change it with put(pool,true)
+
+Using put will switch pool to an offset-preserving mode, which 
+disables mark functionality.
+
+put is intended for use cases where  [`FlyToken`](@ref)s are used with known
+content pools. Most important case is [`TokenVector`](@ref).
+"""
+function put(pool::IOShared, s, ::Type{Token{F}}) where F
+    f = unsafe_put(pool, Token{F}(s))
+    t = Token{F}(f,shared(pool,pool.writeofs))
+    return t
+end
+
+
+"set pool.locateOnPut for subsequent put calls"
+function put(pool::IOShared, locateOnPut::Bool) 
+    pool.locateOnPut = locateOnPut
+    return nothing
+end
+
+
+
 """
 allocate a new buffer and preserve content, resizing at offset ofs.
 
@@ -207,47 +305,103 @@ function realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
         && (ofs-resize <= io.writeofs)
         ) || boundserror(io,ofs,resize)
     end
+    tokencount = 0 # compute count of registered tokens which occupy heap space
+    if length(io.registered)>0
+        # FlyToken heap usage: effective size is not given by readofs/writeofs but by FlyToken sizes on heap
+        ofs!=io.writeofs || resize<0 && error("only append is allowed for IOShared with registered FlyToken vectors!")
+        size = resize # sum up all references into heap: maximum space needed.
+        for v in io.registered
+            for t in v
+                # ignore all direct/empty tokens
+                if !isdirect(t) && usize(t)>0
+                    size += usize(t)
+                    tokencount += 1
+                end
+            end
+        end
+    end
+
     # new limit: several considerations.
     # (1) at least, it must be >= size
-    # (2) should not be smaller then preferredlimit
+    # (2) should not be smaller than preferredlimit
     # (3) ensure that write(UInt8) is O(1) ==> enlarge size such that free space is O(size)
-    limit = io.preferredlimit
-    while size > limit
-        # enlarge
-        limit <<= 1 # ensures consideration (3): double buffer sizes
-        limit == 0 && (limit = typemax(UInt32)) # handles overflow
-    end
+    limit = max(io.preferredlimit,UInt32((size*3)>>1)) # 50% more than necessary size
     buf = _string_n(limit)
     ptr = pointer(buf)
-    count = (ofs - preservedofs) %UInt # size of reserved content before ofs
-    s = io.buffer # only for @preserve
-    GC.@preserve s buf # for safety. might be unnecessary
-    begin
-        ## copy first part
-        if count>0
-            ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
-                  ptr, io.ptr+preservedofs, count)
-        end
-        # copy 2nd part: ofs..io.writeofs
-        if resize<0
-            count2 =  (io.writeofs-ofs+resize) %UInt
-            if count2>0
-                ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
-                    ptr+count, io.ptr+ofs-resize, count2)
-            end
+    if tokencount>0
+        # FlyToken heap usage: copy all FlyToken content to new buffer
+        tmp = IOShared(limit)
+        splitsize = ((size-resize)*3 ÷ tokencount) >>2 # 3/4 of average size
+        if io.locateOnPut && tokencount>2 && splitsize>1
+            runs = [splitsize%UInt64,0%UInt64]
         else
-            count2 =  (io.writeofs-ofs) %UInt
-            if count2>0
-                ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
-                    ptr+count+resize, io.ptr+io.ofs, count2)
+            runs = [0%UInt64]
+        end
+        for run in runs
+            for v in io.registered
+                for i in 1:length(v)
+                    t = v[i]
+                    if !isdirect(t) && usize(t)>run # 1st run: usize above splitsize, 2nd run: usize>0
+                        v[i] = hf(put(tmp,BToken(t,io.buffer)))
+                    end
+                end
             end
         end
+
+        else
+
+        end
+        for v in registered
+            for t in v
+                sizet = usize(t)
+                if !(isdirect(t) or sizet==0)
+                    if io.locateOnPut
+
+                    else
+
+                    end
+                end
+            end
+        end
+        else
+            # simple append
+        end
+        io.writeofs = ofs
+        buf = tmp.buffer
+    else
+        # normal IOShared: keep preserved data
+        count = (ofs - preservedofs) %UInt # size of reserved content before ofs
+        buf = _string_n(limit)
+        ptr = pointer(buf)
+        s = io.buffer # only for @preserve
+        GC.@preserve s buf # for safety. might be unnecessary
+        begin
+            ## copy first part
+            if count>0
+                ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
+                    ptr, io.ptr+preservedofs, count)
+            end
+            # copy 2nd part: ofs..io.writeofs
+            if resize<0
+                count2 =  (io.writeofs-ofs+resize) %UInt
+                if count2>0
+                    ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
+                        ptr+count, io.ptr+ofs-resize, count2)
+                end
+            else
+                count2 =  (io.writeofs-ofs) %UInt
+                if count2>0
+                    ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
+                        ptr+count+resize, io.ptr+io.ofs, count2)
+                end
+            end
+        end
+        ofs -= preservedofs
+        io.readofs -= preservedofs
+        io.mark != NOMARK && (io.mark -= preservedofs)
+        io.writeofs = size %UInt32
     end
-    ofs -= preservedofs
-    io.readofs -= preservedofs
-    io.mark != NOMARK && (io.mark -= preservedofs)
     io.shared = 0
-    io.writeofs = size %UInt32
     io.limit = limit
     io.buffer = buf
     io.ptr = ptr
@@ -317,13 +471,9 @@ end
 
 ensure that count bytes can be read from io or throw an error.
 """
-function ensure_readable(io::IOShared{T}, count::UInt32) where T <: MaybeIO
-    fillup(count)
-    io.writeofs-io.readofs >= count && return nothing
-    if !(T===Nothing)
-        fillup(io,count-(io.writeofs-io.readofs))
-        usize(io) >= count && return nothing
-    end
+function ensure_readable(io::IOShared, count::UInt32)
+    fillup(io,count)
+    usize32(io) >= count && return nothing
     error("read request for $count bytes fails - end-of-data")
 end
 
@@ -359,12 +509,10 @@ valid search results, you must call fillup before searching with
 a count so large that match results beyond count bytes are
 irrelevant.
 
-NOOP if io <:IO{Nothing} or io.ioread==false
+NOOP if io.ioread==false
 """
-fillup(io::IOShared{Nothing},count::UInt32) = nothing
-
-function fillup(io::IOShared{T}, count::UInt32) where T <: IO
-    if io.ioread && io.writeofs-io.readofs < count
+function fillup(io::IOShared, count::UInt32)
+    if io.writeofs-io.readofs < count && io.ioread
         count -=  io.writeofs-io.readofs # what is additionally requested 
         avail = min(bytesavailable(io.io), typemax(UInt32)) % UInt32
         count > avail && (count = avail)
@@ -378,32 +526,43 @@ function fillup(io::IOShared{T}, count::UInt32) where T <: IO
         s = io.buffer
         GC.@preserve s unsafe_read(io.io,io.ptr+io.writeofs,count%UInt)
         io.writeofs += count
+        if count== ise
     end
     nothing
 end
 
 
 
-## searching (w/o Matcher)
+## searching (including Matcher support)
 ## TODO locate umbenennen in findfirst?
 ## TODO wir brauchen Suche nach byte, Token, Substring. 
 ## TODO wir sollten das auf SubString implementieren und IOShared auf SubString 'casten'
 
 
+
+Base.match(r::Matcher, io::IOShared) = match(r,io.readofs,usize(io),io.buffer)
+
+# TODO wir brauchen Suche ohne Matcher für Byte und String in matcher.jl
+# TODO und hier und in Token Aufruf beider für IO
+
 """
-locate a single byte in a buffer.
+locate a single byte in current buffer.
 
 return typemax(UInt32) if not found or 1st offset found.
+does NOT fillup!
 
 """
-function locate(pool::IOShared,pattern::UInt8)
-    size = usize(pool)%Int
-    p = pool.ptr+pool.readofs
+function _locate(pool::IOShared,pattern::UInt8, position::UInt32=0%UInt32) # TODO nicht besser absoluter offset??!
+    
+    size = usize(pool)%Int - position
+    p = pool.ptr+pool.readofs+position
     b = pool.buffer
     GC.@preserve b
         q = ccall(:memchr, Ptr{UInt8}, (Ptr{UInt8}, Int32, Csize_t), p, pattern, size)
     q == C_NULL ? typemax(UInt32) : (q-p)%UInt32
 end
+
+
 
 
 minihash(v::UInt8) = (1%UInt64)<<(v&63)
@@ -500,8 +659,18 @@ Base.match(r::Regex, io::IOShared) = match(r,substr(io))
 
  
 
-# unfertig!!! 
+#= unfertig!!! 
 function Base.readuntil(io::IOShared, delim::UInt8; keep::Bool=false)
+
+    rel = 0 # relative offset
+    while true
+        fillup(io,rel+1)
+        if io.readofs+rel >= writeofs
+            error("Delimiter not found in data")
+        end
+        if codeunit(io.buffer)
+
+    end
     lb = 70
     A = StringVector(lb)
     nread = 0
@@ -528,7 +697,7 @@ function Base.readuntil(io::IOShared, delim::UInt8; keep::Bool=false)
     end
     A
 end
-
+=#
 
 
 ## Base API
@@ -542,8 +711,8 @@ written content is removed from this.
 no buffer reorganization, but flushing can increase
 re-use of an unshared buffer
 """
-function Base.flush(io::IOShared{T}) where T <: MaybeIO
-    if ! (T===Nothing) && !io.ioread
+function Base.flush(io::IOShared) 
+    if io !== nothing && !io.ioread
         endofs = min(io.mark,io.writeofs)
         if  endofs > io.readofs
             sswrite(io.io,io.readofs,endofs-io.readofs, io.buffer)
@@ -554,9 +723,11 @@ function Base.flush(io::IOShared{T}) where T <: MaybeIO
 end
 
 
-"return a new IOBuffer with same (shared) contents, but no mark, default preferredlimit"
-Base.copy(b::IOShared{Nothing}) = IOShared(io.readofs,usize(io),_share(io,io.limit))
-
+"return a new IOShared with same (shared) contents, but no mark, default preferredlimit"
+function Base.copy(b::IOShared) 
+    b.io === nothing || error("cannot copy IOShared with attached source/sink")
+    return IOShared(io.readofs,usize(io),io.buffer)
+end
 
 
 function Base.show(io::IO, b::IOShared)
@@ -577,43 +748,6 @@ end
 
 
 Base.skip(io::IOShared, delta::Integer) = seek(io,io.readofs+delta)
-
-
-
-"""
-    put(pool::IOShared, t::ParameterizedToken, locate::Bool = false)
-
-
-put contents of a token into a pool and return a token of the 
-same content and type. Noop if content is already in pool or
-a direct coded in flytoken. 
-
-If pool.locateOnPut is true, a search for the contents in pool is performed,
-found contents is referenced. This can reduce memory consumption 
-but increases CPU use. Default is false, change it with put(pool,true)
-
-"""
-function put(pool::IOShared{Nothing}, t::ParameterizedToken{FLY}) where FLY <:FlyToken
-    isdirect(t) && return t # nothing to do on DirectToken
-    t.buffer === pool.buffer && return t # nothing to do on already pooled content
-    size = usize(t)%UInt32
-    ofs = typemax(UInt32)
-    if pool.locateOnPut
-        ofs = locate(pool,offset(t),size,t.buffer)
-    end
-    if ofs ==typemax(UInt32)
-        # not found: append data
-        ensure_writeable(pool,size)
-        ofs = pool.writeofs
-        write(pool,offset(t),size,t.buffer)
-    end
-    @inbounds ParameterizedToken{FLY}((t.fly & !OFFSET_BITS) + ofs,_share(pool,ofs+size))
-end
-
-"set pool.locateOnPut for subsequent put calls"
-function put(pool::IOShared{Nothing}, locateOnPut::Bool) 
-    pool.locateOnPut = locateOnPut
-end
 
 
 ## read functions
@@ -759,10 +893,10 @@ function Base.write(to::IOShared, from::IO)
 end
 
 
-"write all available bytes in from's buffer (no fillup)"
+"write all available bytes in from's buffer (with fillup)"
 function Base.write(to::IOShared, from::IOShared) 
     to===from && error("write(io,io) not allowed for io::IOShared ")
-    sswrite(to,from.readofs,usize(from),from.buffer)
+    sswrite(to,from.readofs,available(from),from.buffer)
 end
 
 
@@ -771,18 +905,17 @@ end
 
 
 function Base.eof(io::IOShared)
-    if io.readofs >= io.writeofs
-        fillup(io,1%Uint32)
-    end
-    return io.readofs >= io.writeofs
+    fillup(io,1%Uint32)
+    return io.readofs == io.writeofs
 end
 
-"no of bytes immediately available for reading "
-Base.bytesavailable(io::IOShared{Nothing}) = usize(io)%Int
 
-
-Base.bytesavailable(io::IOShared{T}) where T <: IO = usize(io)%Int + bytesavailable(io.io)
-
+function Base.bytesavailable(io::IOShared) 
+    ret = usize(io)%Int
+    if io.ioread 
+        ret += bytesavailable(io.io)
+    end
+end
 
 
 ## offset related operations
@@ -796,13 +929,16 @@ Base.position(io::IOShared) = io.readofs %Int
 Seek moves read position given by position(io) to a new offset.
 
 Please take into account that read and write operations may move
-content within the internal buffer, offsets are not stable.
+content within the internal buffer, offsets are usually not stable.
+
+
 
 Use seek within currently defined content, given by the offsets 
 from position(io) up to position(io)+usize(io) directly before seek operation,
-or use mark to "freeze" content above mark position,. and its offsets 
-relative to mark position. If mark is 0, all offsets are "frozen" 
-except for explicit resize operations.
+or use mark to "freeze" content above mark position, and seek 
+relative to mark position. 
+
+If mark is 0, all offsets are preserved except for explicit resize operations.
 """
 function Base.seek(io::IOShared, n::Integer)
     # different from IOBuffer which projects on valid offsets, due to a REPL requirement
@@ -812,7 +948,7 @@ function Base.seek(io::IOShared, n::Integer)
 end
 
 
-Base.seekstart(io::IOShared{Nothing}) = seek(io,0)
+Base.seekstart(io::IOShared) = seek(io,0)
 
 
 function Base.seekend(io::IOShared)
@@ -822,6 +958,7 @@ end
 
 
 function Base.mark(io::IOShared)
+    io.preserveOffsets && error("IOShared has preservedOffsets - mark is not supported")
     io.mark = io.readofs
 end
 
@@ -830,6 +967,7 @@ Base.ismarked(io::IOShared) = io.mark != NOMARK
 
 
 function Base.unmark(io::IOShared)
+    io.preserveOffsets && error("IOShared has preservedOffsets - unmark is not supported")
     ret = ismarked(io)
     io.mark = NOMARK
     return ret
@@ -856,8 +994,10 @@ mark position is removed.
 
 n is a 0-based offset. It is declared Integer to be compatible with 
 the method signature in Base, value must be unsigned.
+
+Warning: take care if io.io is not nothing
 """
-function Base.truncate(io::IOShared{Nothing}, n::Integer)
+function Base.truncate(io::IOShared, n::Integer)
     n < 0 && throw(ArgumentError("truncate failed, n must be ≥ 0, got $n"))
     pos = UInt32(n) # does check for 32 bit overflow
     if pos >io.writeofs 
@@ -867,7 +1007,7 @@ function Base.truncate(io::IOShared{Nothing}, n::Integer)
         end
     end
     io.writeofs = pos
-    io.readofs>io.writeofs && io.readofs = io.writeofs
+    io.readofs>io.writeofs && (io.readofs = io.writeofs)
     io.writeofs < io.mark && io.mark != NOMARK && unmark(io)
     return io
 end
@@ -900,7 +1040,7 @@ Base.iswritable(io::IOShared) = true
 
 
 "similar to take!(IOBuffer) but returns a substring instead of a mutable byte array"
-function Base.take!(io::IOShared{Nothing})
+function Base.take!(io::IOShared)
     ss = SubString(io.readofs,usize(io), shared(io,io.writeofs))
     io.readofs = io.writeofs = 0
     return ss
@@ -910,46 +1050,47 @@ end
 @inline Base.ensureroom(io::IOBuffer, nshort::Int) = ensurewritable(io, UInt32(nshort))
 
 
-@noinline function Base.close(io::IOShared{T}) where T <: IO
-    flush(io)
-    close(io.io)
+@noinline function Base.close(io::IOShared)
+    if io.io !== nothing
+        flush(io)
+        close(io.io)
+        io.io = nothing
+    end
+    io.ioread = false
     io.writeofs = 0
-    io.limit = 0 # enforces reallocation on any attempt to use again
     io.readofs = 0
     io.mark = typemax(UInt32)
+    io.locateOnPut = false
+    io.preserveOffsets = false
+    io.limit = 0 # enforces reallocation on any attempt to use again, used also as flag for isopen
+    io.buffer = EMPTYSTRING
     nothing
 end
 
-isopen(io::IOShared) = io.limit==0
+Base.isopen(io::IOShared) = io.limit !=0
 
-"""
-    take!(b::IOBuffer)
 
-Obtain the contents of an `IOBuffer` as an array, without copying. Afterwards, the
-`IOBuffer` is reset to its initial state.
-
-# Examples
-```jldoctest
-julia> io = IOBuffer();
-
-julia> write(io, "JuliaLang is a GitHub organization.", " It has many members.")
-56
-
-julia> String(take!(io))
-"JuliaLang is a GitHub organization. It has many members."
-```
-"""
-
-# copy-size crc32c of IOBuffer:
-function _crc32c(io::IOBuffer, nb::Integer, crc::UInt32=0x00000000)
-    nb < 0 && throw(ArgumentError("number of bytes to checksum must be ≥ 0"))
-    io.readable || throw(ArgumentError("read failed, IOBuffer is not readable"))
-    n = min(nb, bytesavailable(io))
-    n == 0 && return crc
-    crc = GC.@preserve io unsafe_crc32c(pointer(io.data, io.writeofs), n, crc)
-    io.writeofs += n
-    return crc
+"equivalent to read everything"
+function Base.empty!(io::IOShared)
+    flush(io)
+    io.readofs = io.writeofs
+    if io.ioread 
+        close(io.io)
+        io.io = nothing
+        io.ioread = false
+    end
+    return io
 end
-_crc32c(io::IOBuffer, crc::UInt32=0x00000000) = _crc32c(io, bytesavailable(io), crc)
 
 
+
+function checkrange(offset::UInt32, size::UInt64, io::IOShared)
+    checksize(offset+size,io.writeofs)
+    checksize(io.readofs,offset)
+end
+
+
+# package internal API
+function register(pool::IOShared, tv::Vector{HybridFly})
+
+end

@@ -13,6 +13,9 @@ checkrange(val::Integer,min::Integer,max::Integer) = checkrange(Int64(val),Int64
 ckecksize(size::Unsigned, limit::Integer) = checkrange(Int64(size),0,Int64(limit))
 
 
+ckeckbyteofs(ofs:UInt32, size::Unsigned) = ofs<size || error("OffsetError: required was $ofs < $size")
+
+
 #Base.@propagate_inbounds function checksize(size::Unsigned, maxsize)
 
 

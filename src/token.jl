@@ -2,11 +2,11 @@
 """
 Central token type: a flyweight token plus its buffer
 """
-struct ParameterizedToken{FLY<:FlyToken} <: AbstractToken
-    fly :: FLY # category, size, offset, possibly content
+struct Token{F<:FlyToken} <: AbstractToken
+    fly :: F # category, size, offset, possibly content
     buffer :: String # memory with token text data or EMPTYSTRING
-    function ParameterizedToken{FLY}(fly::FLY, buffer::String) where FLY<:FlyToken
-        @boundscheck isdirect(fly) || usize(fly)==0 || checksize(offset(fly)+usize(fly),usize(buffer))
+    Base.@propagate_inbounds function Token{F}(fly::F, buffer::String) where F<:FlyToken
+        @boundscheck isdirect(fly) || checksize(offset(fly)+usize(fly),usize(buffer))
         new(fly,buffer)
     end
 end
@@ -14,14 +14,14 @@ end
 
 ## GenericToken constructors
 
-Base.@propagate_inbounds function ParameterizedToken(fly::FLY, buffer::String) where FLY<:FlyToken
-    ParameterizedToken{FLY}(fly,buffer)
+Base.@propagate_inbounds function Token(fly::F, buffer::String) where F<:FlyToken
+    Token{F}(fly,buffer)
 end
 
 
-Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, s::ParameterizedToken) 
-    @boundscheck checksize(offset+size,usize(s)) # necessary to ensure substring is in bounds of s, not only of s.buffer
-    return SubString(offset+offset(s),size,s.buffer)
+Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, t::Token) 
+    @boundscheck checksize(offset+size,usize(t)) # necessary to ensure substring is in bounds of s, not only of s.buffer
+    return SubString(offset+offset(t),size,t.buffer)
 end
 
 
@@ -35,12 +35,44 @@ additional comparison for most token operations (casting to BToken or DirectFly)
 
 # implementation hint:
 
-Constructors try to avoid copying contents: if contents is backed by a
-String instance, that string will be used as buffer via a BufferFly,
-even ifs size is below 8. To get directly stored content, construct from a
-DirectFly. 
+Constructors using Strings as content source will encode contents with
+up to 7 bytes directly. Only construction from BToken will use buffered content,
+even if byte count is below 8. To guarantee content is always buffer based
+(which is not the intention behind the Token type), construct using a
+BToken. 
 """
-const Token = ParameterizedToken{HybridFly}
+const HToken = Token{HybridFly}
+
+
+# Generation of the string literal macros for tokens
+
+#= variable type generation - may cause type instability
+for cat in instances(TCategory)
+    eval(quote
+        macro $(Symbol(Symbol(cat),"_str"))(txt)
+            if ncodeunits(txt)>7
+                :(BToken($($(cat)),$txt))
+            else
+                :(DirectFly($($(cat)),$txt))
+            end
+        end
+        export $(Symbol(cat))
+        export @$(Symbol(Symbol(cat),"_str"))
+    end)
+end
+=#
+
+for cat in instances(TCategory)
+    eval(quote
+        macro $(Symbol(Symbol(cat),"_str"))(txt)
+            :(HToken($($(cat)),$txt))
+        end
+        export $(Symbol(cat))
+        export @$(Symbol(Symbol(cat),"_str"))
+    end)
+end
+
+
 
 
 """
@@ -48,105 +80,114 @@ Immutable token, always buffer based.
 
 Use this type if you expect mostly a token size above 7
 """
-const BToken = ParameterizedToken{BufferFly}
+const BToken = Token{BufferFly}
 
-Token(t::BufferFly,s::String) = Token(hf(t),s)
-Token(t::DirectFly) = @inbounds Token(hf(t),EMPTYSTRING)
-Token(t::BToken) = @inbounds Token(t.fly,t.buffer)
-Token(t::Token) = t
-Token(cat::TCategory, s::String) = Token(BufferFly(cat,usize(s)),s)
-Token(cat::TCategory) = Token(cat,EMPTYSTRING)
+HToken(t::BufferFly,s::String) = HToken(hf(t),s)
+HToken(t::DirectFly) = @inbounds HToken(hf(t),EMPTYSTRING)
+HToken(t::BToken) = @inbounds HToken(t.fly,t.buffer)
+HToken(t::HToken) = t
 
-BToken(t::DirectFly) = BToken(BufferFly(category(t),usize(t)),string(t))
 BToken(t::BToken) = t
-BToken(t::Token) = isdirect(t) ? BToken(df(t.fly)) : BToken(bf(t.fly),t.buffer)
-BToken(cat::TCategory, s::String) = BToken(BufferFly(cat,usize(s)),s)
-BToken(cat::TCategory) = BToken(cat,EMPTYSTRING)
+BToken(t::HToken) = isdirect(t) ? BToken(df(t.fly)) : BToken(bf(t.fly),t.buffer)
+
+Token{T}(cat::TCategory, s::String) where T<:FlyToken = @inbounds Token{T}(cat,0,usize(s),s)
+Token{T}(cat::TCategory) where T<:FlyToken = @inbounds Token{T}(cat,EMPTYSTRING)
+Token{T}(t::AbstractToken) where T<:FlyToken = Token{T}(category(t),0,usize(t),substring(t))
 
 Base.@propagate_inbounds function BToken(cat::TCategory,offset::UInt32, size::UInt64, s::String)
     size == 0 && return BToken(cat)
-    @boundscheck checkbounds(s,offset+size)
     BToken(BufferFly(cat,size)+offset,s)
 end
 
-Base.@propagate_inbounds function Token(cat::TCategory,offset::UInt32, size::UInt64, s::String)
-    size == 0 && return Token(cat)
-    @boundscheck checkbounds(s,offset+size)
-    Token(BufferFly(cat,size)+offset,s)
+Base.@propagate_inbounds function HToken(cat::TCategory,offset::UInt32, size::UInt64, s::String)
+    size <= MAX_DIRECT_SIZE && return HToken(DirectFly(cat,offset,size,s))
+    HToken(BufferFly(cat,size)+offset,s)
 end
 
-function BToken(cat::TCategory,s::SubString{String})
-    BToken(BufferFly(cat,s.ncodeunits%UInt64)+offset,s.string)
-end
-function Token(cat::TCategory,s::SubString{String})
-    Token(BufferFly(cat,s.ncodeunits%UInt64)+offset,s.string)
-end
 
-BToken(cat::TCategory,s::AbstractString) = BToken(cat,string(s))
- Token(cat::TCategory,s::AbstractString) = Token(cat,string(s))
-DirectFly(t::Token) = isdirect(t) ? df(t.fly) : DirectFly(category(t),t)
 
-#= not used - always reference string  if not constructed from Token or IOShared
-Base.@propagate_inbounds function Token(
-    cat::TCategory,offset::UInt32, size::UInt64, s::String, direct::Bool=false)
-    if direct && (size<=MAX_DIRECT_SIZE)
-        new(hf(DirectFly(cat,offset,size,s)),EMPTYSTRING)
-    else
-        @boundscheck checkbounds(s,offset+size)
-        new(hf(BufferFly(cat,offset,size)),s)
-    end
+Token{T}(cat::TCategory,s::SubString{String}) where T<:FlyToken = 
+  Token{T}(cat,s.offset,ncodeunits%UInt64,s.string)
+
+Token{T}(cat::TCategory,s::AbstractString)  where T<:FlyToken= 
+  Token{T}(cat,s.offset,ncodeunits%UInt64,string(s))
+
+Base.@propagate_inbounds function BToken(offset::UInt32, size::UInt64,t::Union{Token,DirectFly}) 
+    @boundscheck checksize(offset+size,usize(t))
+    @inbounds isdirect(t) ? BToken(category(t),offset,size,string(t)) : BToken(category(t),offset+offset(t),size,t.buffer)
 end
 
-Base.@propagate_inbounds function Token(cat::TCategory, s::Utf8String, direct::Bool=false)
-    size = s.ncodeunits
-    if direct && (size <= MAX_DIRECT_SIZE)
-        Token(hf(DirectFly(cat,s)),EMPTYSTRING)
-    else
-        Token(BToken(cat,s))
-#        @boundscheck checksize(size,MAX_TOKEN_SIZE)
-#        @inbounds Token(hf(BufferFly(cat,s.offset,size)),s.string)
-    end
-end
-=#
+
+Base.@propagate_inbounds HToken(offset::UInt32, size::UInt64,t::Union{Token,DirectFly}) =
+    isdirect(t) ? HToken(DirectFly(offset,size,t)) : HToken(BToken(offset,size,t))
 
 
+# conversions of standard types
+Token{T}(v::Integer) where T<:FlyToken = Token{F}(T_INT,string(v))
+Token{T}(v::Real) where T<:FlyToken =    Token{F}(T_REAL,string(v))
+Token{T}(v::Char) where T<:FlyToken =    Token{F}(T_CHAR,v)
+Token{T}(v::Integer) where T<:FlyToken = Token{F}(T_INT,string(v))
+Token{T}(v::Bool) where T<:FlyToken =    Token{F}(T_KEY,string(v))
+Token{T}(v::AbstractString) where T<:FlyToken = Token{F}(T_TEXT,v)
+
+DirectFly(t::Token{T}) where T<:FlyToken = isdirect(t) ? df(t.fly) : DirectFly(category(t),offset(t),usize(t),t.buffer)
+
+
+
+## special values for missing and nothing
+
+Base.ismissing(t::Token) = t.fly & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_MISSING
+Base.isnothing(t::Token) = t.fly & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_NOTHING
+HToken(::Nothing) = HToken(DIRECT_NOTHING)
+BToken(::Nothing) = BToken(BufferFly(nothing))
+HToken(::Missing) = HToken(DIRECT_MISSING)
+BToken(::Missing) = BToken(BufferFly(missing))
 
 ## Token API methods ##
 
-offset(t::ParameterizedToken) = offset(t.fly)
+offset(t::Token) = offset(t.fly)
 
-category(t::ParameterizedToken) = category(t.fly)
+category(t::Token) = category(t.fly)
 
-isdirect(t::ParameterizedToken) = isdirect(t.fly)
+isdirect(t::Token) = isdirect(t.fly)
 
-usize(t::ParameterizedToken) = usize(t.fly)
+usize(t::Token) = usize(t.fly)
 
 
 ## Base methods for tokens ##
 
-Base.cmp(a::Token, b::DirectFly) = isdirect(a.fly) ? cmp(a.fly,b) : cmp_codeunits(a,b)
+Base.cmp(a::HToken, b::DirectFly) = isdirect(a.fly) ? cmp(a.fly,b) : cmp_codeunits(a,b)
 
-Base.cmp(a::DirectFly, b::Token) = isdirect(b.fly) ? cmp(a,b.fly) : cmp_codeunits(a,b)
+Base.cmp(a::DirectFly, b::HToken) = isdirect(b.fly) ? cmp(a,b.fly) : cmp_codeunits(a,b)
 
-Base.cmp(a::Token, b::Token) = reinterpret(Int64,u64(a.fly)|u64(b.fly))>=0 ? cmp(a.fly,b.fly) : cmp_codeunits(a,b)
+Base.cmp(a::HToken, b::HToken) = reinterpret(Int64,u64(a.fly)|u64(b.fly))>=0 ? cmp(a.fly,b.fly) : cmp_codeunits(a,b)
+
+
+## substring implementations
+
+Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, t::Token{F}) where F<:FlyToken
+    isdirect(t) && return substring(offset,size,df(t.fly))
+    @boundscheck checksize(offset+size,usize(t)) # necessary to ensure substring is in bounds of s, not only of s.string
+    @inbounds return substring(offset+t.offset,size,t.buffer)
+end
 
 
 ## converts
 
-Base.convert(::Type{ParameterizedToken{FLY}}, s::AbstractString) where FLY <:FlyToken = ParameterizedToken{FLY}(T_TEXT,s)
+Base.convert(::Type{Token{F}}, s::AbstractString) where F <:FlyToken = Token{F}(T_TEXT,s)
 
-Base.convert(::Type{ParameterizedToken{FLY}}, t::AbstractToken) where FLY <:FlyToken = ParameterizedToken{FLY}(t)
+Base.convert(::Type{Token{F}}, t::AbstractToken) where F <:FlyToken = Token{F}(t)
 
 Base.convert(::Type{SubString{String}}, t::BToken) = @inbounds SubString(offset(t),usize(t),t.buffer)
 
-Base.convert(::Type{SubString{String}}, t::Token) = convert(SubString{String},BToken(t)) 
+Base.convert(::Type{SubString{String}}, t::HToken) = convert(SubString{String},BToken(t)) 
 
-Base.convert(::Type{SubString{String}}, t::DirectFly) = convert(SubString{String},String(t)) 
+Base.convert(::Type{SubString{String}}, t::DirectFly) = convert(SubString{String},string(t)) 
 
-Base.convert(::Type{String}, t::AbstractToken) = String(t) 
+Base.convert(::Type{String}, t::AbstractToken) = string(t) 
 
 
-function Base.codeunit(t::ParameterizedToken, i::Int)
+function Base.codeunit(t::Token, i::Int)
     if isdirect(t.fly) # optimized away for BToken because isdirect is constantly false
         codeunit(df(t.fly),i)
     else
@@ -164,7 +205,7 @@ function Base.hash(t::BToken, h::UInt)
 end
 
 
-function Base.hash(t::Token, h::UInt)
+function Base.hash(t::HToken, h::UInt)
     isdirect(t) && return hash(df(t.fly),h)
     hash(BToken(t),h)
 end
@@ -187,7 +228,7 @@ function Base.getindex(t::BToken, i::Integer)
     @inbounds return getindex(t.buffer, offset(t) + i)
 end
 
-function Base.getindex(t::Token, i::Integer)
+function Base.getindex(t::HToken, i::Integer)
     @boundscheck checkbounds(t, i)
     @inbounds if isdirect(t)
         getindex(df(t.fly),i)
@@ -198,14 +239,14 @@ end
 =#
 
 
-function Base.read(io::IO, ::Type{Token})
+function Base.read(io::IO, ::Type{HToken})
     cat_size = read(io,Packed31)
     size = bits4_30(cat_size)
     if size <= MAX_DIRECT_SIZE
         t = read(io,cat_size,DirectFly)
-        Token(t)
+        HToken(t)
     else
-        @inbounds Token(TCategory(bits0_3(cat_size)), read(io,size,String))
+        @inbounds HToken(TCategory(bits0_3(cat_size)), read(io,size,String))
     end
 end
 
@@ -217,8 +258,8 @@ function Base.read(io::IO, ::Type{BToken})
 end
 
 
-# serialize Token and BToken
-function Base.write(io::IO, t::ParameterizedToken)
+# serialize Token
+function Base.write(io::IO, t::Token)
     tt = t.fly
     if isdirect(tt) # optimized away for BufferFly
         write(io,df(tt))
@@ -230,32 +271,3 @@ function Base.write(io::IO, t::ParameterizedToken)
     end
 end
 
-
-
-#=
-
-String(s::FlyToken) = String(reinterpret(UInt8, [s.size_content|>ntoh])[1:sizeof(s)])
-
-Base.lastindex(s::FlyToken) = Int(s.size_content & 0xf)
-Base.iterate(s::FlyToken, i::Integer) = iterate(String(s), i)
-Base.iterate(s::FlyToken) = iterate(String(s))
-Base.sizeof(s::FlyToken) = Int(s.size_content & 0xf)
-Base.print(s::FlyToken) = print(String(s))
-Base.display(s::FlyToken) = display(String(s))
-Base.convert(::FlyToken{T}, s::String) where T = FlyToken{T}(s)
-Base.convert(::String, ss::FlyToken) = String(a) #reduce(*, ss)
-Base.firstindex(::FlyToken) = 1
-Base.ncodeunits(s::FlyToken) = ncodeunits(String(s))
-Base.codeunit(s::FlyToken, i) = codeunits(String(s), i)
-Base.isvalid(s::FlyToken, i::Integer) = isvalid(String(s), i)
-
-Base.getindex(s::FlyToken{T}, i::Integer) where T = begin
-    print(i)
-    Char((s.size_content << 8(i-1)) >> 8(sizeof(T)-1))
-end
-Base.collect(s::FlyToken) = getindex.(s, 1:lastindex(s))
-
-==(s::FlyToken, b::String) = begin
-    String(s)  == b
-end
-=#

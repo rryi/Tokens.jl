@@ -31,7 +31,7 @@ const CATEGORY_FLY_BITS = UInt64(31)<<59
 const CATEGORY_BITS = UInt64(15)<<59
 
 "bitmask to test for tiny. Bit set -> (offset,size) pair stored"
-const NOTTINY_BIT = (UInt64(1)<<63)
+const NOTDIRECT_BIT = (UInt64(1)<<63)
 
 "true: size bitfield is split in [`BufferFly`](@ref)"
 const FLY_SPLIT_SIZE = false
@@ -277,7 +277,7 @@ offset(t::HybridFly) = isdirect(t) ? offset(df(t)) : offset(bf(t))
 
 "empty token (offset, length are 0)"
 function BufferFly(cat::TCategory)
-    bf(NOTTINY_BIT | (cat%UInt64)<<59)
+    bf(NOTDIRECT_BIT | (cat%UInt64)<<59)
 end
 
 
@@ -299,7 +299,7 @@ end
 raw incomplete token with category and size in packed format, offset 0
 """
 function BufferFly(cat_size::Packed31)
-    u = NOTTINY_BIT | (cat_size%UInt64) <<59 # tricky: all bits above category are shifted out or set by NOTTINYBIT
+    u = NOTDIRECT_BIT | (cat_size%UInt64) <<59 # tricky: all bits above category are shifted out or set by NOTTINYBIT
     s = bits4_30(cat_size)%UInt64
     u |= FLY_SPLIT_SIZE ? ((s&7)<<56) | ((s>>>3)<<32)  :  (s<<32)
     bf(u)
@@ -366,7 +366,7 @@ constructor for direct encoding from Utf8-encoded strings.
 
 bounds checks performed
 """
-function DirectFly(cat::TCategory, offset::UInt32, size::UInt64, s::Utf8String)
+Base.@propagate_inbounds function DirectFly(cat::TCategory, offset::UInt32, size::UInt64, s::Utf8String)
     size == 0 && return DirectFly(cat)
     @boundscheck checkbounds(s,offset+size)
     fly = DirectFly(cat,size)
@@ -391,6 +391,25 @@ end
 function DirectFly(cat::TCategory, c::Char)
     df(u64(DirectFly(cat,Base.codelen(c))) | UInt64(reinterpret(UInt32, c)) << 24)
 end
+
+
+
+
+
+## special values for missing and nothing
+
+const DIRECT_NOTHING = DirectFly(T_SPECIAL)
+const DIRECT_MISSING = DirectFly(T_SYMBOL)
+Base.isnothing(t::FlyToken) = t & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_NOTHING
+Base.ismissing(t::FlyToken) = t & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_MISSING
+DirectFly(::Nothing) = DIRECT_NOTHING
+DirectFly(::Missing) = DIRECT_MISSING
+HybridFly(::Nothing) = hf(DIRECT_NOTHING)
+HybridFly(::Missing) = hf(DIRECT_MISSING)
+BufferFly(::Nothing) = bf(DIRECT_NOTHING|NOTDIRECT_BIT)
+BufferFly(::Missing) = bf(DIRECT_MISSING|NOTDIRECT_BIT)
+
+Base.@propagate_inbounds DirectFly(offset::UInt32, size::UInt64,t::AbstractToken) = DirectFly(category(t),offset,size,t)
 
 
 ## Token API methods ##
@@ -465,9 +484,16 @@ Base.:&(f::F, andValue::T) where {F<:FlyToken,T<:Unsigned} = reinterpret(F,u64(f
 Base.:+(f::F, addValue::UInt32) where {F<:FlyToken} = isdirect(f) ? error("cannot add offset to DirectFly") : reinterpret(F,u64(f) + addValue)
 
 
+## substring implementation
+
+Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, t::DirectFly) 
+    @boundscheck checksize(offset+size,usize(t)) # necessary to ensure substring is in bounds of s, not only of s.string
+    @inbounds return substring(offset,size,string(t))
+end
 
 
-# serializing of DirectFly
+## Serialization of DirectFly
+
 function Base.write(io::IO, t::DirectFly)
     write(io,Packed31(t))
     for i in 1:usize(t)
@@ -567,6 +593,7 @@ function mmhash(str::DirectFly, seed::UInt32)
     h1 = mhtail1(h1, k1)
     mhfin(len, h1, h2)
 end
+
 
 
 #########################################################
