@@ -17,6 +17,16 @@
     T_LIST = 15
 end
 
+struct AT
+    s::String
+end
+
+#TODO dump impl.?
+"show tokens as custom string constant without token type"
+function Base.show(io::IO,t::AT)
+    print(io,0x15)
+    Base.print_quoted(io, t.s)
+end
 
 struct BL{T<:Enum{UInt8}}
     source :: String # lexer sets mark always to the begin of the current token.

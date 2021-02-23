@@ -12,7 +12,6 @@ primitive type Nibble <: Unsigned 8 end
 
 function Nibble(v::Integer) ::Nibble
     @boundscheck checklimit(v,0x0F)
-    #@boundscheck v <= 0x0F || error("Not in Nibble value range: $v")
     reinterpret(Nibble,v%UInt8)
 end
 
@@ -32,6 +31,24 @@ Base.promote_type(::Type{Nibble}, ::Type{Nibble}) = UInt8
 
 Base.promote_rule(::Type{Nibble}, ::Type{U}) where U<:Signed = Int64
 
-Base.show(io::IO, v::Nibble) = show(io,UInt8(v))
+function Base.show(io::IO, v::Nibble) 
+    code = UInt8(v)
+    if code>0x09
+        code += 0x07
+    end
+    print(io, Char('0'+code))
+end 
+    
+#Base.promote_rule(::Type{T}, ::Type{Nibble}) where T<:Enum  = T
+
+#Base.promote_rule(::Type{Nibble}, ::Type{T}) where T<:Enum  = Nibble
+
+# Base.convert(::Type{T}, x::Nibble) where T<:Enum = T(UInt8(x))
+
+Base.convert(::Type{Nibble}, x::T) where T<:Enum = Nibble(x)
+
+Nibble(v::T) where T<:Enum = Nibble(UInt8(v))
+
+Base.promote_rule(::Type{Nibble}, ::Type{T}) where T<:Enum  = Nibble
 
 

@@ -57,17 +57,25 @@ for cat in instances(TCategory)
 end
 =#
 
-for cat in instances(TCategory)
+
+for cat in 0:15
+    ncat = Nibble(cat)
+    ccat = Char(cat<=9 ? '0'+cat : 'A'+cat-10)
     eval(quote
-        macro $(Symbol(Symbol(cat),"_str"))(txt)
-            :(HToken($($(cat)),$txt))
+        macro $(Symbol('D',ccat,"_str"))(txt)
+            :(DirectFly(:(Nibble($cat),$txt)))
         end
-        export $(Symbol(cat))
-        export @$(Symbol(Symbol(cat),"_str"))
+        export @$(Symbol('D',ccat,"_str"))
     end)
 end
 
+# TODO ditto HToken, BToken
 
+function Base.show(io::IO,t::Token{T}) where T 
+    print(io, T <: HybridFly ? 'H' : 'B')
+    show(category(t))
+    Base.print_quoted(io, t)
+end
 
 
 """

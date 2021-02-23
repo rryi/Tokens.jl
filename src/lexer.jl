@@ -48,7 +48,13 @@ struct ByteLexer <: AbstractLexer
 end
 
 
-function next(bl:ByteLexer,Type{T) :: T where T <:Enum{UInt8}}
+function next(bl:ByteLexer) :: Nibble 
+    mark(bl.source)
+    fillup(bl.source,1)
+    bl.source.writeofs==bl.source.readofs && return Nibble(0) # EOD
+    class = syntax[]
+        < count && io.ioread
+
 end
 
 

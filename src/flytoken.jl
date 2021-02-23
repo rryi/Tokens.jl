@@ -284,7 +284,7 @@ offset(t::HybridFly) = isdirect(t) ? offset(df(t)) : offset(bf(t))
 
 
 "empty token (offset, length are 0)"
-function BufferFly(cat::TCategory)
+function BufferFly(cat::Nibble)
     bf(NOTDIRECT_BIT | (cat%UInt64)<<59)
 end
 
@@ -292,7 +292,7 @@ end
 """
 token with given size, bounds-checked, offset 0
 """
-Base.@propagate_inbounds function BufferFly(cat::TCategory, size::UInt64)
+Base.@propagate_inbounds function BufferFly(cat::Nibble, size::UInt64)
     @boundscheck checklimit(size,MAX_TOKEN_SIZE)
     if BUFFER_SPLIT_SIZE
         BufferFly(cat) | ((size&7)<<56 | (size>>>3)<<32)
@@ -340,7 +340,7 @@ used with this token. You have to grant (or check) validity of (offset,size)
 with respect to the referenced buffer in your code elsewere.
 
 """
-Base.@propagate_inbounds function BufferFly(cat::TCategory, offset::UInt32, size::UInt64)
+Base.@propagate_inbounds function BufferFly(cat::Nibble, offset::UInt32, size::UInt64)
     BufferFly(cat,size)|offset
 end
 
@@ -350,11 +350,11 @@ Constructor of an empty token with given category.
 
 All codeunit bytes are 0, length is 0.
 """
-DirectFly(cat::TCategory) = df( UInt64(cat)<<59 )
+DirectFly(cat::Nibble) = df( UInt64(cat)<<59 )
 
 
 "token with given size, bounds-checked, all code units are 0, prepared for unsafe_setcodeunit"
-Base.@propagate_inbounds function DirectFly(cat::TCategory, size::UInt64)
+Base.@propagate_inbounds function DirectFly(cat::Nibble, size::UInt64)
     @boundscheck checklimit(size,MAX_DIRECT_SIZE)
     df(DirectFly(cat)) | (size << 56)
 end
@@ -362,7 +362,7 @@ end
 
 
 "Construct a DirectFly for size below 8, else a BufferFly with offset 0"
-Base.@propagate_inbounds function HybridFly(cat::TCategory, size::UInt64)
+Base.@propagate_inbounds function HybridFly(cat::Nibble, size::UInt64)
     size <= MAX_DIRECT_SIZE ?
         hf(DirectFly(cat,size)) :
         hf(BufferFly(cat,size))
@@ -374,7 +374,7 @@ constructor for direct encoding from Utf8-encoded strings.
 
 bounds checks performed
 """
-Base.@propagate_inbounds function DirectFly(cat::TCategory, offset::UInt32, size::UInt64, s::Utf8String)
+Base.@propagate_inbounds function DirectFly(cat::Nibble, offset::UInt32, size::UInt64, s::Utf8String)
     size == 0 && return DirectFly(cat)
     @boundscheck checkbounds(s,offset+size)
     fly = DirectFly(cat,size)
@@ -385,7 +385,7 @@ Base.@propagate_inbounds function DirectFly(cat::TCategory, offset::UInt32, size
 end
 
 "token from a string constant (requires size<8)"
-function DirectFly(cat::TCategory, s::Utf8String)
+function DirectFly(cat::Nibble, s::Utf8String)
     size = usize(s)
     @boundscheck checklimit(size,MAX_DIRECT_SIZE)
     fly = DirectFly(cat,size)
@@ -396,7 +396,7 @@ function DirectFly(cat::TCategory, s::Utf8String)
 end
 
 
-function DirectFly(cat::TCategory, c::Char)
+function DirectFly(cat::Nibble, c::Char)
     df(u64(DirectFly(cat,Base.codelen(c))) | UInt64(reinterpret(UInt32, c)) << 24)
 end
 
@@ -406,8 +406,8 @@ end
 
 ## special values for missing and nothing
 
-const DIRECT_NOTHING = DirectFly(T_EOL)
-const DIRECT_MISSING = DirectFly(T_SPECIAL)
+const DIRECT_NOTHING = DirectFly(Nibble(0))
+const DIRECT_MISSING = DirectFly(Nibble(1))
 Base.isnothing(t::FlyToken) = t & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_NOTHING
 Base.ismissing(t::FlyToken) = t & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_MISSING
 DirectFly(::Nothing) = DIRECT_NOTHING
@@ -422,9 +422,9 @@ Base.@propagate_inbounds DirectFly(offset::UInt32, size::UInt64,t::AbstractToken
 
 ## Token API methods ##
 
-category(t::FlyToken) = reinterpret(TCategory, UInt8((u64(t) >>>59)&15))
+category(t::FlyToken) = reinterpret(Nibble, UInt8((u64(t) >>>59)&15))
 
-category(t::DirectFly) = reinterpret(TCategory, UInt8(u64(t) >>>59))
+category(t::DirectFly) = reinterpret(Nibble, UInt8(u64(t) >>>59))
 
 isdirect(t::HybridFly) = reinterpret(Int64,t)>=0
 
@@ -545,11 +545,12 @@ end
 
 
 function Base.show(io::IO,t::FlyToken)
-    print(io,category(t))
+    print(io,string(typeof(t)[1]))
+    show(category(t))
     if isdirect(t)
         Base.print_quoted(io, t)
     else
-        print(io,'<',offset(t),',',sizeof(t),'>')
+        print(io,'<',offset(t)%Int,',',usize(t)%Int,'>')
     end
 end
 
@@ -604,7 +605,6 @@ function mmhash(str::DirectFly, seed::UInt32)
     h1 = mhtail1(h1, k1)
     mhfin(len, h1, h2)
 end
-
 
 
 #########################################################

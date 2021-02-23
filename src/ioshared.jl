@@ -1051,7 +1051,6 @@ end
 
 
 function Base.mark(io::IOShared)
-    io.preserveOffsets && error("IOShared has preservedOffsets - mark is not supported")
     io.mark = io.readofs
 end
 
@@ -1060,7 +1059,6 @@ Base.ismarked(io::IOShared) = io.mark != NOMARK
 
 
 function Base.unmark(io::IOShared)
-    io.preserveOffsets && error("IOShared has preservedOffsets - unmark is not supported")
     ret = ismarked(io)
     io.mark = NOMARK
     return ret

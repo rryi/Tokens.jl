@@ -6,29 +6,39 @@ A categorized string, supertype of all token types in this module.
 In addition to the AbstractString API, an AbstractToken has a
 category which roughly classifies its content.
 It is accessed by [`category`](@ref)(t::AbstractToken).
-Token categories are technically restricted to 16 different values.
-They are defined as enum type [`TCategory`](@ref), designed to be used in
-lexers and parsers.
+Token categories are typed as [`Nibble`](@ref) and internally stored in 4 bits.
+For highest performance and still high readability, use named constants 
+in your application to indicate semantic meaning in your context.
+Even better for readability and debugging is the use of Enum types for
+token category. Have a look at the quite generic [`TCategory`](@ref) 
+as a starting point
 
 For comparisons and hashing, tokens are treated as strings. Two tokens with
 equal content but different category are treated equal and have the
 same hash value.
 
-# Missing and Nothing support
+# Missing support
 
-Missing/Nothing support is already built into all AbstractToken subtypes: 
+Some Missing and Nothing support is already built into all AbstractToken subtypes: 
 they have an internal encoding for missing and nothing, and all concrete subtypes
 must have a constructor with one parameter of type Missing resp. Nothing,
 which construct a token with that encoding.
-ismissing(t::AbstractToken) and isnothing(t::AbstractToken) will return true
-for these encodings. 
+ismissing(t::AbstractToken) and isnothing(t::AbstractToken) will return true for this encoding,
+and Tests with == and === will compare missing/nothing against these encodings.
 
-This is sufficient for applications which do all tests with ismissing
-and isnothing functions. However comparison operators are not overloaded, so t===nothing
-will give false for these encodings. For vectors of tokens, you can explicitly specify
+This is sufficient for most applications. For vectors of tokens, you can explicitly specify
 a subtype of Union{Token,Missing,Nothing} for element types, enabling explicit
 missing and/or nothing values on array read access (internal encodings are 
 converted to missing or nothing).
+
+# string literals
+
+For the three most important token types  [`DToken`](@ref),
+[`BToken`](@ref) and  [`HToken`](@ref), there are special string literal
+macros implemented. They use the first letter D,B or H plus a capitalited
+hexadecimal character as string prefix to define type and category.
+E.g.: D2"hello" is equivalent to DToken(Nibble(2),"hello"), and
+HB"hello" will create HToken(Nibble(11),"hello").
 
 
 # interface requirements
@@ -120,50 +130,52 @@ end
 true if t stores its code units directly in its FlyToken.
 """
 function isdirect(t::AbstractToken)
-    throw(MethodError(offset, (t,)))
+    throw(MethodError(isdirect, (t,)))
 end
 
 
 """
-    category(t::AbstractToken) -> TCategory
+    category(t::AbstractToken) -> Nibble
 
 Current category of given token. A value in 0:15.
-Meaning depends on context. [`Lexer`](@ref) uses
-the meaning defined in the following constants beginning with "T_"
+Meaning depends on context.
 
 """
 function category(t::AbstractToken)
-    throw(MethodError(offset, (t,)))
+    throw(MethodError(category, (t,)))
 end
 
 
 """
-Token category definitions
+OUTDATED!!
 
-These token categories describe the general semantics of token categories,
-as used in package Token. Applications can redefine the meaning of categories 
-within their own context - guidelines are given below.
+Token category default definitions
+
+This Enum contains a set of quite generic token categories. They are used
+to notate token constants as generalized string constants, and in token constructors
+if no category is given. However an application can redefine the meaning of categories 
+within their own context.
 
 
 # group (1): character sequences with fixed character class for 1st and subsequent characters
 
-## T_EOL = 0
+## T_EOD = 0
 
-End of line sequence, 1 or 2 characters, typically a FlyToken.
-A T_EOL token of length 0 is  treated as
-nothing value, i.e. isnothing(t) returns true. 
-Lexers return it on attempts to read beyond end-of-data
+A token signaling some end of data.
+Token constructors with argument *missing* create a token of this
+category and empty content.
 
-end-of-line characters within a token are never reported asT_EOL.
+A typical case for nonempty content is an end-of-line sequence.
 
 ## T_WHITE = 1
 
 A sequence of whitespace characters.
-May include end of line characters, if *T_EOL* is not used.
+May include end of line characters, if *T_EOD* is not used for end-of-line
+tokens.
 
 ## T_IDENT = 2
 
-An identifier in the lexer context.
+An identifier in a lexer context.
 
 Typical rules are: 1st character is a letter, following characters are
 letters or digits. Some special characters like '_' could also
@@ -334,7 +346,7 @@ generates a Token(T_INT,"123").
 
 """
 @enum TCategory :: UInt8 begin
-    T_WHITE = 0
+    T_EOD = 0
     T_IDENT = 1
     T_SPECIAL = 2
     T_INT = 3
@@ -344,7 +356,7 @@ generates a Token(T_INT,"123").
     T_REAL = 7
     T_COMMENT = 8
     T_TEXT = 9
-    T_END = 10
+    T_WHITE = 10
     T_SYMBOL = 11
     T_KEY = 12
     T_PI = 13
@@ -460,9 +472,10 @@ usize32(s::T) where T = usize(s)%UInt32
 
 
 """
-returns the category of a token
+returns the category of a token as a Nibble
 """
 function category end
+
 
 
 
@@ -502,13 +515,6 @@ function Base.==(a::AbstractToken, b::AbstractToken)
 end
 =#
 
-
-#TODO dump impl.?
-"show tokens as custom string constant without token type"
-function Base.show(io::IO,t::AbstractToken)
-    print(io,category(t))
-    Base.print_quoted(io, t)
-end
 
 
 ## helpers ##
