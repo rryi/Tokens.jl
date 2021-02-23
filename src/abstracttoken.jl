@@ -88,6 +88,11 @@ abstract type AbstractToken <: AbstractString
 end
 
 
+"strings known to have codeunit type UInt8 and Utf8-Encoding"
+const Utf8String = Union{String,SubString{String},AbstractToken}
+
+
+
 #########################################################
 ################# AbstractToken API #####################
 #########################################################
@@ -142,12 +147,21 @@ within their own context - guidelines are given below.
 
 # group (1): character sequences with fixed character class for 1st and subsequent characters
 
-## T_WHITE = 0
+## T_EOL = 0
+
+End of line sequence, 1 or 2 characters, typically a FlyToken.
+A T_EOL token of length 0 is  treated as
+nothing value, i.e. isnothing(t) returns true. 
+Lexers return it on attempts to read beyond end-of-data
+
+end-of-line characters within a token are never reported asT_EOL.
+
+## T_WHITE = 1
 
 A sequence of whitespace characters.
 May include end of line characters, if *T_EOL* is not used.
 
-## T_IDENT = 1
+## T_IDENT = 2
 
 An identifier in the lexer context.
 
@@ -166,7 +180,7 @@ Lexers decide to report each special character as its own token, or
 report a contiguous sequence of special characters as one token.
 
 A token t with category T_SPECIAL and empty content is treated as
-undefined value, i.e. isnothing(t) returns true. Lexers can return
+missing value, i.e. ismissing(t) returns true. Lexers can return
 such a token on an attempt to read beyond end of data.
 
 ## T_INT = 3
@@ -193,13 +207,6 @@ and will usually remove the leading and trailing quotes.
 
 Token constructors with a Char argument create a token of category 
 T_CHAR and its Utf8 string representation as content.
-
-## T_EOL = 6
-
-End of line sequence, 1 or 2 characters, typically a FlyToken.
-In a context where line breaks have no syntactical meaning, a lexer can
-treat end of line characters as whitespace and never report T_EOL.
-
 
 # group (3): more complex lexer tokens
 
@@ -448,6 +455,10 @@ Functions ncodeunits and sizeof are derived from usize
 """
 function usize end
 
+usize32(s::T) where T = usize(s)%UInt32
+
+
+
 """
 returns the category of a token
 """
@@ -462,14 +473,13 @@ Base.codeunit(t::AbstractToken) = UInt8
 Base.ncodeunits(t::AbstractToken) = usize(t)%Int
 
 
-
 ## special values for missing and nothing
 
 "AbstractToken uses category T_SYMBOL with usize 0 as encoding for missing"
-Base.ismissing(t::AbstractToken) = category(t)==T_SYMBOL && usize(t)==0%UInt64
+Base.ismissing(t::AbstractToken) = category(t)==T_SPECIAL && usize(t)==0%UInt64
 
 "AbstractToken uses category T_SPECIAL with usize 0 as encoding for nothing"
-Base.isnothing(t::AbstractToken) = category(t)==T_SPECIAL && usize(t)==0%UInt64
+Base.isnothing(t::AbstractToken) = category(t)==T_EOL && usize(t)==0%UInt64
 
 
 

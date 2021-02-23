@@ -16,16 +16,13 @@ Only use substring for Utf8 string processing!!
 function substring end
 
 
-"These string types have methods operating with Utf8 code units"
-const Utf8String = Union{String,SubString{String},AbstractToken}
-
 "an empty string buffer"
 const EMPTYSTRING = ""
 
-usize(s::Utf8String) = ncodeunits(s)%UInt64
+usize(s::Union{String,SubString{String}}) = ncodeunits(s)%UInt64
 
 
-"fast SubString construction using offset and size in bytes, with check of UTF8 content validity"
+"SubString construction using offset and size in bytes, with check of UTF8 content validity. "
 Base.@propagate_inbounds function Base.SubString{String}(ofs::UInt32, size::UInt64,s::String)
     @boundscheck checksize(ofs+size,ncodeunits(s))
     return @inbounds SubString(s,ofs+1,thisind(s,(ofs+size)%Int))
@@ -43,8 +40,13 @@ Base.@propagate_inbounds substring(offset::UInt32, size::UInt64, s::AbstractStri
 
 Base.@propagate_inbounds substring(offset::UInt32, size::UInt64, s::String) = SubString(offset,size,s)
 
+
+"universal fallback implementation in (offset,size)-notation"
+substring(offset::UInt32, size::UInt64, s) = substring(offset, size, string(s))
+
+
 Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, s::SubString{String})
-    @boundscheck checksize(offset+size,ncodeunits(s)) # necessary to ensure substring is in bounds of s, not only of s.string
+    @boundscheck checksize(offset+size,usize(s)) # necessary to ensure substring is in bounds of s, not only of s.string
     @inbounds return SubString(offset+s.offset,size,s.string)
 end
 
@@ -73,9 +75,3 @@ end
 
 
 
-"codeunit with offset (aka 0-based index)"
-@inline function byte(s::String, ofs::UInt32)
-    @boundscheck checkbyteofs(ofs,ncodeunits(s))
-    b = GC.@preserve s unsafe_load(pointer(s)+ofs))
-    return b
-end

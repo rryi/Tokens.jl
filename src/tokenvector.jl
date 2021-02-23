@@ -16,30 +16,31 @@ array read accesses, to check for nothing or missing and replace a token instanc
 struct TokenVector{T<:Union{Nothing,Missing,Token}}  <: AbstractVector{T} 
     vec :: Vector{HybridFly}
     heap :: IOShared # sharing and appending from outside is ok, other operations not.
-    Base.@propagate_inbounds function TokenVector{T}(vec::Vector{HybridFly},heap::IOShared) where T
-        # inform heap about usage
-        register(heap,vec,true)
-        heap.mark = 0
-        @boundscheck begin
-            for f in vec
-                checkrange(offset(f),usize(f),heap)
-            end
-        end
-        new(vec,heap)
+    function TokenVector{T}(heap::IOShared) where T
+        vec = Vector{HybridFly}()
+        push!(heap.registered,vec)
+        return new(vec,heap)
     end
 end
 
 const HTokenVector = TokenVector{Token{HybridFly}}
 const BTokenVector = TokenVector{Token{BufferFly}}
+const EXPECTED_TOKENSIZE = 10
 
-TokenVector{T}(undef::UndefInitializer, n) where T = 
-  TokenVector{T}(Vector{HybridFly}(undef,n),IOShared(max(10*n,DEFAULTLIMIT)))
+TokenVector{T}(undef::UndefInitializer, n) where T = TokenVector{T}(undef,n,EXPECTED_TOKENSIZE)
 
-function TokenVector{T}(v::AbstractVector{S}) where {T,S}
+function TokenVector{T}(undef::UndefInitializer, vectorsize, tokensize) where T
+    ret = TokenVector{T}(IOShared(vectorsize*tokensize))
+    resize!(ret.vec,vectorsize)
+    fill!(ret.vec,T(nothing))
+end
+
+
+function TokenVector{T}(v::AbstractVector{S}, expectedTokensize=EXPECTED_TOKENSIZE) where {T,S}
     size = length(v)
-    ret = TokenVector{T}(undef,size)
+    ret = TokenVector{T}(undef,size, expectedTokensize)
     for i in 1:size
-        ret[i] = HToken <: T ? HToken(v[i]) : BToken(v[i])
+        ret[i] = T(v[i])
     end
 end
 
@@ -47,10 +48,12 @@ Base.IndexStyle(::Type{<:TokenVector}) = IndexLinear()
 
 Base.eltype(::Type{TokenVector{T}}) where T = T
 
+Base.sizehint!(tv:: TokenVector{T}, n) where T = sizehint!(tv.vec,n)
+
 
 function Base.empty!(tv::TokenVector)
     empty!(tv.vec)
-    empty!(tv.heap)
+    # empty!(tv.heap) # not allowed - heap is designed to be nonexclusive.
     return tv
 end
 
@@ -58,19 +61,6 @@ Base.size(tv::TokenVector) = size(tv.vec)
 Base.length(tv) = length(tv.vec)
 Base.firstindex(tv::TokenVector) = 1
 Base.lastindex(tv::TokenVector) = length(tv)
-
-"""
-    unsafe_get(tv::TokenVector{T}, i::Int)
-
-Returns a Token which is valid as long as no reorganization is performed on the IOShared used by tv as heap.
-Does always return a HToken/BToken, no nothing/missing, even if Nothing/Missing are subtypes of T.
-
-Function is unsafe, because returned token is not guaranteed to be protected against buffer changes.
-If tv.heap.shared is smaller than offset(t)+usize(t) for the returned Token, a reorganization of tv.heap
-may (re-)move content referenced by t. This will result in a content change of t which violates 
-immutability of t and may cause severe errors.
-"""
-unsafe_get(tv::TokenVector{T}, i::Int) where T = HToken <:T ? HToken(tv.vec[i],tv.heap.buffer) : BToken(bf(tv.vec[i]),tv.heap.buffer) 
 
 
 function Base.getindex(tv::TokenVector{T}, i::Int) where T
@@ -81,10 +71,14 @@ function Base.getindex(tv::TokenVector{T}, i::Int) where T
     if Nothing <:T && isnothing(v)
         return nothing
     end
+    sharedbuf = tv.heap.buffer
+    #= commented out because 1-2 checks on any read access
+    # should not be necessary, but could prevend unnecessary references to heap.buffer
     sharedbuf = EMPTYSTRING
     if !isdirect(v) && usize(v)>0
-        sharedbuf = share(tv.heap.buffer,usize(v)+offset(v))
+        sharedbuf = tv.heap.buffer
     end
+    =#
     return HToken <:T ? HToken(v,sharedbuf) : BToken(bf(v),sharedbuf) 
 end
 
@@ -109,52 +103,66 @@ t maybe one of the following:
 
  """
 function Base.setindex!(tv::TokenVector{T}, s, i::Int) where T 
-    if  HToken <:T
-        tv.vec[i] = put(tv.heap, HToken(s)).fly
-    else
-        tv.vec[i] = hf(put(tv.heap, HToken(s)).fly)
-    end
+    tv.vec[i] = hf(put(tv.heap, s, T).fly)
 end
 
 
 
 """
-    Base.compact(tv::TokenVector)
+    compress(tv::TokenVector, reserve::UInt32)
 
-    Build a reorganized copy of a TokenVector with (usually) reduced memory consumption.
-    Important use case: reorganization before serialization to external storage.
+Build a reorganized copy of a TokenVector with (usually) reduced memory consumption.
+Important use case: reorganization before serialization to external storage.
 
-
+A new IOShared is allocated, a new TokenVector is built using it as buffer,
+compression is turned on. reserve specifies the maximum of free space in
+the new buffer - small values will probably force a reallocation.
     
-    try to reduce heap size by looking for shared content.
+Warning
 
-    Warning
-    
-     * runtime O(length(tv)**2)
-     * heap is set to search mode, subsequent assignments are O(length(tv))
+    * worstcase runtime O((sum of token sizes)**2)
+    * heap is set to search mode, subsequent assignments are O(heapsize)
+
+New vector is returned. Old vector is cleared (all content is deleted)
 """
-function Base.compact(tv::TokenVector{T}) where T
-    newheap = IOShared(usize32(tv.heap))
-    vec = copy(tv.vec)
-    put(newheap,true)
-    # sort by length, put largest tokens first - to increase chance of content reuse
-    ii = sortperm(vec,id=(t->typemax(Int32)-usize(t)))
+function compress(tv::TokenVector{T},reserve::UInt32) where T
+    totalsize = 0
+    for i in 1:length(tv.vec)
+        f = tv.vec[i]
+        if !isdirect(f) 
+            s = usize(f)
+            if (! HToken <: T) || s > MAX_DIRECT_SIZE
+                totalsize += s
+            end
+        end
+    end
+    heap = IOShared(totalsize)
+    ret = TokenVector{T}(heap)
+    compressOnPut(heap,true)
+    ii = sortperm(tv.vec,by = t -> -(usize(t)%Int) )
     for i in ii
-        t = vec[i]
-        newt = put(newheap,Token{F}(t,tv.heap))
-        ret.vec[i] = newt.fly
+        t = tv[i]
+        if !isdirect(t) 
+            s = usize(f)
+            if HToken <: T && s <= MAX_DIRECT_SIZE
+                t = T(DirectFly(t))
+            else
+                t = put(heap,t)
+            end
+        end
+        ret.vec[i] = hf(t.fly)
     end
-    return TokenVector{F,T}
-    ret.heap = newheap
-
+    shrink!(heap,reserve,false)
+    empty!(tv)
+    return ret
 end
 
 
-"Resize tv to contain n elements. If n is smaller than the current collection length, the first n elements will be retained. If n is larger, the new elements are set to empty tokens of category T_END."
+"Resize tv to contain n elements. If n is smaller than the current collection length, the first n elements will be retained. If n is larger, the new elements are set to nothing."
 function Base.resize!(tv::TokenVector{F}, n::Integer) where {F<:FlyToken,T<:Union{Nothing,Missing,Token{F}}}
     oldsize = length(tv.vec)
     resize!(tv.vec,n)
-    t = F(T_END) # initialization value
+    t = F(nothing) # initialization value
     while oldsize < n
         oldsize += 1
         tv.vec[oldsize] = t
@@ -163,15 +171,14 @@ end
 
 
 "inserts a copy of item with content in tv.heap (or direct)"
-Base.insert!(tv::TokenVector{F}, index::Integer, item::Token{F}) where F <: FlyToken = insert!(tv.vek,index,put(tv.heap,item).fly)
+Base.insert!(tv::TokenVector{F}, index::Integer, item::Token{F}) where F  = insert!(tv.vek,index,put(tv.heap,item).fly)
 
 
 
-function Base.append!(tv::TokenVector{F,T},items::AbstractVector{S}) where {F <: FlyToken, T<:Union{Nothing,Missing,Token{F}}, S <: AbstractString}
-    itemindices = eachindex(items)
-    n = length(itemindices)
+function Base.append!(tv::TokenVector{T},items::AbstractVector{S}) where {T, S }
+    n = length(items)
     last = lastindex(tv)
-    Base._growend!(tv.vec, n)
+    resize!(tv.vec, last+n)
     for i in 1:n
         setindex!(tv,items[i],last+i)
     end
@@ -208,6 +215,8 @@ function Base.convert(::Type{TokenVector{F}}, arr::AbstractVector{S}) where {F<:
     return tv
 end
 
+#= analog implementieren??
+
 Base.convert(::Type{StringArray}, arr::AbstractArray{T}) where {T<:STR} = StringArray{T}(arr)
 Base.convert(::Type{StringArray{T, N} where T}, arr::AbstractArray{S}) where {S<:STR, N} = StringVector{S}(arr)
 StringVector{T}() where {T} = StringVector{T}(UInt8[], UInt64[], UInt32[])
@@ -219,87 +228,12 @@ StringVector{T}(buffer::Vector{UInt8}, len::Int) where {T} = StringVector{T}(buf
 
 (T::Type{<:StringArray})(arr::AbstractArray{<:STR}) = convert(T, arr)
 
-_isassigned(arr, i...) = isassigned(arr, i...)
-_isassigned(arr, i::CartesianIndex) = isassigned(arr, i.I...)
-@inline Base.@propagate_inbounds function Base.getindex(a::StringArray{T}, i::Integer...) where T
-    offset = a.offsets[i...]
-    if offset == UNDEF_OFFSET
-        throw(UndefRefError())
-    end
 
-    if Missing <: T && offset === MISSING_OFFSET
-        return missing
-    end
-
-    convert(T, WeakRefString(pointer(a.buffer) + offset, a.lengths[i...]))
-end
 
 function Base.similar(a::StringArray, T::Type{<:STR}, dims::Tuple{Vararg{Int64, N}}) where N
     StringArray{T, N}(undef, dims)
 end
 
-function Base.empty!(a::StringVector)
-    empty!(a.buffer)
-    empty!(a.offsets)
-    empty!(a.lengths)
-    a
-end
-
-Base.copy(a::StringArray{T, N}) where {T,N} = StringArray{T, N}(copy(a.buffer), copy(a.offsets), copy(a.lengths))
-
-@inline function Base.setindex!(arr::StringArray, val::WeakRefString, idx::Integer...)
-    p = pointer(arr.buffer)
-    if val.ptr <= p + sizeof(arr.buffer)-1 && val.ptr >= p
-        # this WeakRefString points to data entirely within arr's buffer
-        # don't add anything to the buffer in this case.
-        # this optimization helps `permute!`
-        arr.offsets[idx...] = val.ptr - p
-        arr.lengths[idx...] = val.len
-        val
-    else
-        _setindex!(arr, val, idx...)
-    end
-end
-
-@inline function Base.setindex!(arr::StringArray, val::STR, idx::Integer...)
-    _setindex!(arr, val, idx...)
-end
-
-@inline function Base.setindex!(arr::StringArray, val::STR, idx::Integer)
-    _setindex!(arr, val, idx)
-end
-
-function _setindex!(arr::StringArray, val::AbstractString, idx...)
-    buffer = arr.buffer
-    l = length(arr.buffer)
-    resize!(buffer, l + sizeof(val))
-    unsafe_copyto!(pointer(buffer, l+1), pointer(val,1), sizeof(val))
-    arr.lengths[idx...] = sizeof(val)
-    arr.offsets[idx...] = l
-    val
-end
-
-function _setindex!(arr::StringArray, val::AbstractString, idx)
-    buffer = arr.buffer
-    l = length(arr.buffer)
-    resize!(buffer, l + sizeof(val))
-    unsafe_copyto!(pointer(buffer, l+1), pointer(val,1), sizeof(val))
-    arr.lengths[idx] = sizeof(val)
-    arr.offsets[idx] = l
-    val
-end
-
-function _setindex!(arr::StringArray{Union{T, Missing}, N}, val::Missing, idx) where {T, N}
-    arr.lengths[idx] = 0
-    arr.offsets[idx] = MISSING_OFFSET
-    val
-end
-
-function _setindex!(arr::StringArray{Union{T, Missing}, N}, val::Missing, idx...) where {T, N}
-    arr.lengths[idx...] = 0
-    arr.offsets[idx...] = MISSING_OFFSET
-    val
-end
 
 function Base.resize!(arr::StringVector, len)
     l = length(arr)
@@ -378,18 +312,6 @@ function Base.append!(a::StringVector{T}, b::AbstractVector) where T
         push!(a, x)
     end
     a
-end
-
-function _growat!(a::StringVector, i, len)
-    Base._growat!(a.offsets, i, len)
-    Base._growat!(a.lengths, i, len)
-    return
-end
-
-function _deleteat!(a::StringVector, i, len)
-    Base._deleteat!(a.offsets, i, len)
-    Base._deleteat!(a.lengths, i, len)
-    return
 end
 
 const _default_splice = []
@@ -504,3 +426,5 @@ function Base.popfirst!(a::StringVector)
     deleteat!(a, 1)
     return item
 end
+
+=#

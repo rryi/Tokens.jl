@@ -148,23 +148,26 @@ Base.match(r::Matcher, s) = match(r,s,firstindex(s))
 
 function Base.match(r::Matcher, s::Utf8String, start::Int) 
     ss = substring(s)
-    @boundscheck(ss,start)
+    @boundscheck checkbounds(ss,start)
     match(r,UInt32(start-1+ss.offset),usize(ss),ss.string)
-    r.found > 0 && r.found -= offset(ss)
+    r.found > 0 && (r.found -= offset(ss))
     return r
-}
+end
 
 
 function Base.match(r::Matcher, s::BToken, start::Int) 
     @boundscheck checkrange(s,start,last)
     match(r,start-1+offset(s),usize(s),s.buffer)
-    r.found > 0 && r.found -= offset(s)
+    r.found > 0 && (r.found -= offset(s))
     return r
 end
 
 
 Base.match(r::Matcher, s::AbstractToken, start::Int) = match(r,BToken(s),start)
 
+
+
+Base.match(r::Matcher, io::IOShared) = match(r,io.readofs,usize(io),io.buffer)
 
 
 """
@@ -174,21 +177,19 @@ Algorithm is very similar to that used for string search in Julia Base.
 Little initialization overhead, very fast, but no pattern flexibility.
 """
 mutable struct ExactMatcher <: Matcher
-  pattern :: BToken # pattern must match all bytes
+  pattern :: String # pattern must match all bytes
   bloommask :: UInt64 # ORed byte hashes 
   lastskip :: Int # bytes to skip if last byte matches but another byte does not 
   bloomskip :: Int # bytes to skip if a byte-s hash is not in bloommask
   found :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
-  last :: Uint8 # last byte of pattern
+  last :: UInt8 # last byte of pattern
   function ExactMatcher(pattern::AbstractString)
-    matcher = new(BToken(pattern),0%UInt64,0,0,0,0x00)
+    matcher = new(string(pattern),0%UInt64,0,0,0,0x00)
     initialize!(matcher)
     return matcher
   end
 end
 
-"very simple hash function used for ExactMatcher search"
-bloomhash(b::UInt8) = UInt64(1) << (b & 0x3f)
 
 
 "can be used to re-initialize after assigning a new pattern"
@@ -247,14 +248,13 @@ end
 """
 function match(matcher::ExactMatcher,ofs::UInt32,size::UInt64, s::String)
     n = ncodeunits(matcher.pattern)
-    @boundscheck sfirst <1 && sfirst = 1
-    @boundscheck slast > ncodeunits(s) && slast = ncodeunits(s)
+    @boundscheck checklimit(ofs+size,s)
     m = size%Int
     matcher.found = 0 # assign default value "not found"
     if n<=1
         # special trivial case: switch to byte search or nothing to search
         if n==0
-            m>0 && matcher.found = sfirst 
+            m>0 && (matcher.found = ofs+1)
         else
             # Base works like this: something(findnext(isequal(codeunit(e.last,1)), s, sfirst), 0)
             # let-s compare performance with an ordinary loop
@@ -327,7 +327,7 @@ mutable struct AnyByteMatcher <: Matcher
     pattern :: Vector{UInt8} # pattern matches any of its bytes
     ismatch ::  Vector{UInt8} # 0 or index into pattern. index is 1+(byte value to test)
     found :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
-    variant :: Uint32 # index into pattern for match
+    variant :: UInt32 # index into pattern for match
     function AnyByteMatcher(pattern::Vector{UInt8})
         ismatch =  Vector{UInt8}(0%UInt8,256)
         for i in 1::length(pattern)
@@ -403,13 +403,13 @@ mutable struct AnyStringMatcher <: Matcher
     pattern :: Vector{UInt8} # pattern matches any of its bytes
     ismatch ::  Vector{UInt8} # 0 or index into pattern. index is 1+(byte value to test)
     found :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
-    variant :: Uint32 # index into pattern for match
+    variant :: UInt32 # index into pattern for match
     function AnyStringMatcher(pattern::BTokenVector)
         error("not yet implemented")
     end
 end
 
-AnyStringMatcher(pattern:T ) where T <: Union{AbstractVector{AbstractString}} = AnyStringMatcher(BTokenVector(pattern))
+AnyStringMatcher(pattern::AbstractVector{T} ) where T <: AbstractString = AnyStringMatcher(BTokenVector(pattern))
 
 #=
 function match(matcher::AnyStringMatcher,s::String, sfirst::Int, slast::Int )

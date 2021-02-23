@@ -1,40 +1,40 @@
 # FlyToken type and associated methods
 
 "maximal count of code units directly encoded in a FlyToken"
-const MAX_DIRECT_SIZE = UInt64(7)
+const MAX_DIRECT_SIZE = 7%UInt64
 
 "maximal count of code units in any buffer based Token"
-const MAX_TOKEN_SIZE = UInt64((1<<27) - 1)
+const MAX_TOKEN_SIZE = ((1<<27) - 1) %UInt64
 
 "bitmask to check if any inline code unit is not ascii"
 const NOTASCII_BITS = UInt64(0b10000000100000001000000010000000100000001000000010000000)
 
 "bitmask to restrict to all code units in a DirectFly"
-const CODEUNIT_BITS =(UInt64(1)<<56)-1
+const CODEUNIT_BITS =((1<<56)-1)%UInt64
 
 "bitmask to isolate size bits in DirectFly"
-const DIRECT_SIZE_BITS = UInt64(MAX_DIRECT_SIZE)<<56
+const DIRECT_SIZE_BITS = MAX_DIRECT_SIZE<<56
 
 "bitmask to isolate size bits in BufferFly"
-const FLY_SIZE_BITS = UInt64(MAX_TOKEN_SIZE)<<32
+const BUFFER_SIZE_BITS = MAX_TOKEN_SIZE<<32
 
 "bitmask to isolate splitted size bits in BufferFly"
-const SPLIT_SIZE_BITS = UInt64((1<<24)-1)<<32
+const SPLIT_SIZE_BITS = (((1<<24)-1)<<32)%UInt64
 
 "bitmask to restrict to all code units in a DirectFly"
-const OFFSET_BITS =(UInt64(1)<<32)-1
+const OFFSET_BITS =((1<<32)-1)%UInt64
 
 "bitmask to isolate category and fly type bit in any FlyToken"
-const CATEGORY_FLY_BITS = UInt64(31)<<59
+const CATEGORY_FLY_BITS = (31<<59)%UInt64
 
 "bitmask to isolate category in any FlyToken"
-const CATEGORY_BITS = UInt64(15)<<59
+const CATEGORY_BITS = (15%UInt64)<<59
 
 "bitmask to test for tiny. Bit set -> (offset,size) pair stored"
-const NOTDIRECT_BIT = (UInt64(1)<<63)
+const NOTDIRECT_BIT = (1%UInt64)<<63
 
 "true: size bitfield is split in [`BufferFly`](@ref)"
-const FLY_SPLIT_SIZE = false
+const BUFFER_SPLIT_SIZE = false
 
 
 "Known standard types usable in reinterpret for 64 bit types"
@@ -135,17 +135,17 @@ Memory layout:
 bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
     =1 =========== ========================== =======================
     |  |           |                          |
-    |  |           |                          offset: 0..2^32-1
+    |  |           |                          offset: 32 bits
     |  |           size: 26 bits
     |  category: 0..15
     |
-    =1: must be 1 for any BToken instance.
+    =1: must be 1 for any BToken instance if size>0 or offset>0
     code units are stored in buffer[offset+1] .. buffer[offset+size]
     buffer must be known in the processing context.
 ```
 
 
-if [`FLY_SPLIT_SIZE`](@ref) is true, the following bit layout is used:
+if [`BUFFER_SPLIT_SIZE`](@ref) is true, the following bit layout is used:
 
     ```
     bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
@@ -156,7 +156,7 @@ if [`FLY_SPLIT_SIZE`](@ref) is true, the following bit layout is used:
         |  |           size&7: lowest 3 bits
         |  category: 0..15
         |
-        =1: must be 1 for any BToken instance.
+        =1: must be 1 for any BToken instance if size>0 or offset>0
         code units are stored in buffer[offset+1] .. buffer[offset+size]
         buffer must be known in the processing context.
     ```
@@ -207,6 +207,14 @@ is regarded faster.
 category bits are identical for DirectFly and BufferFly, so no conditional
 code is needed.
 
+If offset and size bitfields are both 0, DirectFly and BufferFly encode
+the same content: an empty string. 
+
+TODO unique nothing/missing encoding with nondirect flag cleared even for BufferFly?! 
+
+TODO we have unnormalized values which may NEVER occur with proper constructor calls:
+length==0, but offset bytes !=0. Currently, not used. Could be used to store
+an Int32 or a Float in binary format.
 """
 primitive type HybridFly <: FlyToken 64 end
 
@@ -285,8 +293,8 @@ end
 token with given size, bounds-checked, offset 0
 """
 Base.@propagate_inbounds function BufferFly(cat::TCategory, size::UInt64)
-    @boundscheck checksize(size,MAX_TOKEN_SIZE)
-    if FLY_SPLIT_SIZE
+    @boundscheck checklimit(size,MAX_TOKEN_SIZE)
+    if BUFFER_SPLIT_SIZE
         BufferFly(cat) | ((size&7)<<56 | (size>>>3)<<32)
     else
         BufferFly(cat) | (size<<32)
@@ -301,7 +309,7 @@ raw incomplete token with category and size in packed format, offset 0
 function BufferFly(cat_size::Packed31)
     u = NOTDIRECT_BIT | (cat_size%UInt64) <<59 # tricky: all bits above category are shifted out or set by NOTTINYBIT
     s = bits4_30(cat_size)%UInt64
-    u |= FLY_SPLIT_SIZE ? ((s&7)<<56) | ((s>>>3)<<32)  :  (s<<32)
+    u |= BUFFER_SPLIT_SIZE ? ((s&7)<<56) | ((s>>>3)<<32)  :  (s<<32)
     bf(u)
 end
 
@@ -310,7 +318,7 @@ end
 Base.@propagate_inbounds function DirectFly(cat_size::Packed31)
     u = ((cat_size%UInt64) <<59) & CATEGORY_BITS
     s = bits4_30(cat_size)%UInt64
-    @boundscheck checksize(s,MAX_DIRECT_SIZE)
+    @boundscheck checklimit(s,MAX_DIRECT_SIZE)
     u |= ((s&7)<<56)
     df(u)
 end
@@ -347,7 +355,7 @@ DirectFly(cat::TCategory) = df( UInt64(cat)<<59 )
 
 "token with given size, bounds-checked, all code units are 0, prepared for unsafe_setcodeunit"
 Base.@propagate_inbounds function DirectFly(cat::TCategory, size::UInt64)
-    @boundscheck checksize(size,MAX_DIRECT_SIZE)
+    @boundscheck checklimit(size,MAX_DIRECT_SIZE)
     df(DirectFly(cat)) | (size << 56)
 end
 
@@ -379,7 +387,7 @@ end
 "token from a string constant (requires size<8)"
 function DirectFly(cat::TCategory, s::Utf8String)
     size = usize(s)
-    @boundscheck checksize(size,MAX_DIRECT_SIZE)
+    @boundscheck checklimit(size,MAX_DIRECT_SIZE)
     fly = DirectFly(cat,size)
     for i in 1:size
         fly = unsafe_setcodeunit(fly,i,codeunit(s,i))
@@ -398,8 +406,8 @@ end
 
 ## special values for missing and nothing
 
-const DIRECT_NOTHING = DirectFly(T_SPECIAL)
-const DIRECT_MISSING = DirectFly(T_SYMBOL)
+const DIRECT_NOTHING = DirectFly(T_EOL)
+const DIRECT_MISSING = DirectFly(T_SPECIAL)
 Base.isnothing(t::FlyToken) = t & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_NOTHING
 Base.ismissing(t::FlyToken) = t & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_MISSING
 DirectFly(::Nothing) = DIRECT_NOTHING
@@ -427,16 +435,16 @@ isdirect(t::BufferFly) = false
 usize(t::DirectFly) = (u64(t)>>56) & MAX_DIRECT_SIZE
 
 function usize(t::BufferFly)
-    if FLY_SPLIT_SIZE
+    if BUFFER_SPLIT_SIZE
         usize(df(t)) | (u64(t)&SPLIT_SIZE_BITS)>>29
     else
-        (u64(t)&FLY_SIZE_BITS)>>32
+        (u64(t)&BUFFER_SIZE_BITS)>>32
     end
 end
 
 
 function usize(t::HybridFly)
-    if FLY_SPLIT_SIZE
+    if BUFFER_SPLIT_SIZE
         # tricky code without jumps:
         # 3 lowest bits of the size are always stored at bit position 56..58.
         # if NONASCII_BIT is set, we have additional 24 bits for size at bits 32..55
@@ -468,27 +476,23 @@ function Base.String(d::DirectFly)
     p = pointer(s)
     GC.@preserve s begin
         for i in 1::size 
-            @inbounds unsafe_store!(p,codeunit(d,i),i)
+            @inbounds unsafe_store!(p,codeunit(d,i))
+            p += 1
         end
     end
     return s
 end
 
-"bitwise OR applied to a FlyToken."
+"bitwise OR applied to a FlyToken. DANGEROUS: no validity checks!!"
 Base.:|(f::F, orValue::T) where {F<:FlyToken,T<:Unsigned} = reinterpret(F,u64(f) | orValue)
 
-"bitwise AND applied to a FlyToken."
+"bitwise AND applied to a FlyToken. DANGEROUS: no validity checks!!"
 Base.:&(f::F, andValue::T) where {F<:FlyToken,T<:Unsigned} = reinterpret(F,u64(f) & andValue)
 
-"add an offset to a FlyToken (error if isdirect(f))."
-Base.:+(f::F, addValue::UInt32) where {F<:FlyToken} = isdirect(f) ? error("cannot add offset to DirectFly") : reinterpret(F,u64(f) + addValue)
-
-
-## substring implementation
-
-Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, t::DirectFly) 
-    @boundscheck checksize(offset+size,usize(t)) # necessary to ensure substring is in bounds of s, not only of s.string
-    @inbounds return substring(offset,size,string(t))
+"add an offset to a FlyToken (error if isdirect(f)). DANGEROUS: no validity or overflow checks!!"
+function Base.:+(f::F, addValue::Int) where {F<:FlyToken} 
+    isdirect(f) && error("cannot add offset to DirectFly")
+    reinterpret(F,u64(f) + addValue)
 end
 
 
@@ -521,9 +525,16 @@ end
 
 
 
-function Base.codeunit(t::DirectFly, index::Int)
+Base.@propagate_inbounds function Base.codeunit(t::DirectFly, index::Int)
     @boundscheck checkbounds(t,index)
     (255%UInt8) & (u64(t) >>> ((7-index)<<3))%UInt8
+end
+
+
+
+Base.@propagate_inbounds function byte(t::DirectFly, ofs::UInt32)
+    @boundscheck checkbyteofs(ofs,usize(t))
+    (255%UInt8) & (u64(t) >>> ((6-index)<<3))%UInt8
 end
 
 

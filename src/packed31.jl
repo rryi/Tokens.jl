@@ -20,6 +20,10 @@ end
 Base.UInt32(v::Packed31) = reinterpret(UInt32,v)
 
 
+Base.show(io::IO, v::Packed31) = show(io,UInt32(v))
+
+
+
 "extracts the lowest 4 bits from  an unsigned value as an UInt8"
 function bits0_3(v)
     (v%UInt8) & 0x0f  
@@ -30,8 +34,8 @@ bits0_3(v::Packed31) = bits0_3(UInt32(v))
 bits4_30(v::Packed31) = UInt32(v) >> 4
 
 function Packed31(bits0_3::UInt8, bits4_30::UInt32)
-    @boundscheck checksize(bits0_3,7) 
-    @boundscheck checksize(bits4::30,(1<<27)-1) 
+    @boundscheck checklimit(bits0_3,15) 
+    @boundscheck checklimit(bits4_30,(1<<27)-1) 
     Packed31((bits4_30<<4) + bits0_3)
 end
 

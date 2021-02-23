@@ -6,7 +6,7 @@ struct Token{F<:FlyToken} <: AbstractToken
     fly :: F # category, size, offset, possibly content
     buffer :: String # memory with token text data or EMPTYSTRING
     Base.@propagate_inbounds function Token{F}(fly::F, buffer::String) where F<:FlyToken
-        @boundscheck isdirect(fly) || checksize(offset(fly)+usize(fly),usize(buffer))
+        @boundscheck isdirect(fly) || checklimit(offset(fly)+usize(fly),usize(buffer))
         new(fly,buffer)
     end
 end
@@ -18,11 +18,6 @@ Base.@propagate_inbounds function Token(fly::F, buffer::String) where F<:FlyToke
     Token{F}(fly,buffer)
 end
 
-
-Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, t::Token) 
-    @boundscheck checksize(offset+size,usize(t)) # necessary to ensure substring is in bounds of s, not only of s.buffer
-    return SubString(offset+offset(t),size,t.buffer)
-end
 
 
 """
@@ -90,14 +85,16 @@ HToken(t::HToken) = t
 BToken(t::BToken) = t
 BToken(t::HToken) = isdirect(t) ? BToken(df(t.fly)) : BToken(bf(t.fly),t.buffer)
 
-Token{T}(cat::TCategory, s::String) where T<:FlyToken = @inbounds Token{T}(cat,0,usize(s),s)
-Token{T}(cat::TCategory) where T<:FlyToken = @inbounds Token{T}(cat,EMPTYSTRING)
-Token{T}(t::AbstractToken) where T<:FlyToken = Token{T}(category(t),0,usize(t),substring(t))
+Token{T}(cat::TCategory, s::String) where T = @inbounds Token{T}(cat,0,usize(s),s)
+Token{T}(cat::TCategory) where T = @inbounds Token{T}(cat,EMPTYSTRING)
+Token{T}(t::AbstractToken) where T = Token{T}(category(t),0,usize(t),substring(t))
+
 
 Base.@propagate_inbounds function BToken(cat::TCategory,offset::UInt32, size::UInt64, s::String)
     size == 0 && return BToken(cat)
     BToken(BufferFly(cat,size)+offset,s)
 end
+
 
 Base.@propagate_inbounds function HToken(cat::TCategory,offset::UInt32, size::UInt64, s::String)
     size <= MAX_DIRECT_SIZE && return HToken(DirectFly(cat,offset,size,s))
@@ -105,15 +102,16 @@ Base.@propagate_inbounds function HToken(cat::TCategory,offset::UInt32, size::UI
 end
 
 
-
-Token{T}(cat::TCategory,s::SubString{String}) where T<:FlyToken = 
+Token{T}(cat::TCategory,s::SubString{String}) where T = 
   Token{T}(cat,s.offset,ncodeunits%UInt64,s.string)
 
-Token{T}(cat::TCategory,s::AbstractString)  where T<:FlyToken= 
+
+Token{T}(cat::TCategory,s::AbstractString)  where T= 
   Token{T}(cat,s.offset,ncodeunits%UInt64,string(s))
 
+
 Base.@propagate_inbounds function BToken(offset::UInt32, size::UInt64,t::Union{Token,DirectFly}) 
-    @boundscheck checksize(offset+size,usize(t))
+    @boundscheck checklimit(offset+size,usize(t))
     @inbounds isdirect(t) ? BToken(category(t),offset,size,string(t)) : BToken(category(t),offset+offset(t),size,t.buffer)
 end
 
@@ -123,21 +121,22 @@ Base.@propagate_inbounds HToken(offset::UInt32, size::UInt64,t::Union{Token,Dire
 
 
 # conversions of standard types
-Token{T}(v::Integer) where T<:FlyToken = Token{F}(T_INT,string(v))
-Token{T}(v::Real) where T<:FlyToken =    Token{F}(T_REAL,string(v))
-Token{T}(v::Char) where T<:FlyToken =    Token{F}(T_CHAR,v)
-Token{T}(v::Integer) where T<:FlyToken = Token{F}(T_INT,string(v))
-Token{T}(v::Bool) where T<:FlyToken =    Token{F}(T_KEY,string(v))
-Token{T}(v::AbstractString) where T<:FlyToken = Token{F}(T_TEXT,v)
+Token{T}(v::Integer) where T = Token{F}(T_INT,string(v))
+Token{T}(v::Real) where T =    Token{F}(T_REAL,string(v))
+Token{T}(v::Char) where T =    Token{F}(T_CHAR,v)
+Token{T}(v::Bool) where T =    Token{F}(T_KEY,string(v))
+Token{T}(v::AbstractString) where T = Token{F}(T_TEXT,v)
+Token{T}(offset::UInt32, size::UInt64,s::String) where T = Token{F}(T_TEXT,v)
 
-DirectFly(t::Token{T}) where T<:FlyToken = isdirect(t) ? df(t.fly) : DirectFly(category(t),offset(t),usize(t),t.buffer)
+
+DirectFly(t::Token{T}) where T = isdirect(t) ? df(t.fly) : DirectFly(category(t),offset(t),usize(t),t.buffer)
 
 
 
 ## special values for missing and nothing
 
-Base.ismissing(t::Token) = t.fly & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_MISSING
-Base.isnothing(t::Token) = t.fly & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_NOTHING
+Base.ismissing(t::Token) = df(t.fly & ~NOTDIRECT_BIT) == DIRECT_MISSING
+Base.isnothing(t::Token) = df(t.fly & ~NOTDIRECT_BIT) == DIRECT_NOTHING
 HToken(::Nothing) = HToken(DIRECT_NOTHING)
 BToken(::Nothing) = BToken(BufferFly(nothing))
 HToken(::Missing) = HToken(DIRECT_MISSING)
@@ -154,7 +153,41 @@ isdirect(t::Token) = isdirect(t.fly)
 usize(t::Token) = usize(t.fly)
 
 
+## ByteString API
+
+"""
+ByteString is a family of types which support the following API:
+
+ * pointer(t) -> Ptr{UInt8} 
+
+ * usize(t) -> number of bytes as UInt64
+
+ * byte(t,ofs::UInt32) -> UInt8 value at offset ofs
+"""
+const ByteString = Union{String,SubString{String},BToken,Vector{UInt8},Vector{Int8}}
+
+
+usize(s::Union{Vector{UInt8},Vector{Int8}}) = length(s)
+
+"codeunit with offset (aka 0-based index)"
+Base.@propagate_inbounds function byte(s::ByteString, ofs::UInt32)
+    @boundscheck checkbyteofs(ofs,usize(s))
+    b = GC.@preserve s unsafe_load(pointer(s)+ofs)
+    return b
+end
+
+Base.@propagate_inbounds function byte(s::HToken, ofs::UInt32)
+    if isdirect(s) 
+        return byte(s.fly,ofs)
+    end
+    @boundscheck checkbyteofs(ofs,usize(s))
+    @inbounds byte(s.buffer,ofs+offset(s))
+end
+
+
 ## Base methods for tokens ##
+
+Base.pointer(t::BToken) = pointer(t.buffer)+offset(t)
 
 Base.cmp(a::HToken, b::DirectFly) = isdirect(a.fly) ? cmp(a.fly,b) : cmp_codeunits(a,b)
 
@@ -165,9 +198,9 @@ Base.cmp(a::HToken, b::HToken) = reinterpret(Int64,u64(a.fly)|u64(b.fly))>=0 ? c
 
 ## substring implementations
 
-Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, t::Token{F}) where F<:FlyToken
+Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, t::Token{F}) where F
     isdirect(t) && return substring(offset,size,df(t.fly))
-    @boundscheck checksize(offset+size,usize(t)) # necessary to ensure substring is in bounds of s, not only of s.string
+    @boundscheck checklimit(offset+size,usize(t)) # necessary to ensure substring is in bounds of s, not only of s.string
     @inbounds return substring(offset+t.offset,size,t.buffer)
 end
 

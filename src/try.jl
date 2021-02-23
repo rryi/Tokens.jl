@@ -1,3 +1,121 @@
+@enum EE :: UInt8 begin
+    T_WHITE = 0
+    T_IDENT = 1
+    T_SPECIAL = 2
+    T_INT = 3
+    T_QUOTED = 4
+    T_CHAR = 5
+    T_EOL = 6
+    T_REAL = 7
+    T_COMMENT = 8
+    T_TEXT = 9
+    T_END = 10
+    T_SYMBOL = 11
+    T_KEY = 12
+    T_PI = 13
+    T_STRUCT = 14
+    T_LIST = 15
+end
+
+
+struct BL{T<:Enum{UInt8}}
+    source :: String # lexer sets mark always to the begin of the current token.
+    syntax::Vector{UInt32} # Bits: character class of 
+end
+
+
+function next(bl::BL{T}) :: T where T
+    @inbounds begin
+        b = codeunit(bl.source,1)-UInt8('a')
+        return T(b)
+    end
+end
+
+
+function nexti(bl::BL{T}) :: UInt8 where T
+    @inbounds begin
+        b = codeunit(bl.source,1)-UInt8('a')
+        return b
+    end
+end
+
+bl = BL{EE}("hallo",Vector{UInt32}())
+
+next(bl)
+
+nexti(bl)
+
+abstract type WOP end
+
+mutable struct WP <: WOP
+    s::String
+    p:: Ptr{UInt8}
+    WP(s::String) = new(s,pointer(s))
+end
+
+
+
+mutable struct OP <:WOP
+    s::String
+end
+
+@inline function byte(s::String, ofs::UInt32)
+    @boundscheck checkbyteofs(ofs,ncodeunits(s))
+    b = GC.@preserve s unsafe_load(pointer(s)+ofs))
+    return b
+end
+
+@inline function byte1(w::OP, ofs::UInt32) 
+    @inbounds begin
+        s = w.s
+        return GC.@preserve s unsafe_load(pointer(s)+ofs))
+    end
+end
+
+
+@inline function byte1(w::WP, ofs::UInt32) 
+    @inbounds begin
+        s = w.s
+        return GC.@preserve s unsafe_load(w.p+ofs))
+    end
+end
+
+@inline function byte2(w::OP, ofs::UInt32) 
+    @inbounds begin
+        s = w.s
+        b = GC.@preserve s unsafe_load(pointer(s)+ofs))
+    end
+    return b
+end
+
+
+@inline function byte2(w::WP, ofs::UInt32) 
+    @inbounds begin
+        s = w.s
+        b = GC.@preserve s unsafe_load(w.p+ofs))
+    end
+    return b
+end
+
+
+@inline function byte0(w::WOP, ofs::UInt32) 
+    @inbounds return codeunit(w.s,ofs+1
+end
+
+
+function codetest(i::Int)
+    s = "0123456789"
+    op = OP(s)
+    wp = WP(s)
+    ui = i%UInt32
+    sum0 = byte0(s,2)+byte0(s,4)
+    sum1 = byte1(op,2)+byte1(wp,4)
+    sum2 = byte2(op,2)+byte2(wp,4)
+    return sum1+sum2+sum3
+end
+
+
+
 mutable struct TA{T}
     buf::T
 end
