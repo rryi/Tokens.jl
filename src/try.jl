@@ -1,3 +1,56 @@
+f0(x,y)=x+y
+
+f1(;x = 1, y = 2) = x + y
+
+
+f2(xy::NamedTuple) = xy.x + xy.y
+
+
+struct XY{T}
+         x::T
+         y::T
+         s::String
+       end
+
+f3(xy::XY) = xy.x + xy.y
+using BenchmarkTools
+
+
+@code_native   f0(1,2)
+@code_native   f1(x = 1, y = 2)
+@code_native   f2((x=1, y=2))
+
+xy = XY(1,2,"hallo")
+@code_native   f3(xy)
+
+
+function tt(a::Int)
+    while (true)
+        b = a*a
+        println("b= $b a: $a")
+        a -=1
+        a<0 && break
+    end
+    return b
+end
+
+@btime f0(1,2)
+@btime f1(x = 1, y = 2)
+@btime f2((x=1, y=2))
+@btime f3(xy)
+
+
+
+
+
+
+
+
+
+
+
+
+
 @enum EE :: UInt8 begin
     T_WHITE = 0
     T_IDENT = 1

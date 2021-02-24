@@ -19,44 +19,122 @@ abstract type AbstractLexer end
 
 """
 ByteLexer is thought to work on byte streams with mostly ASCII based
-source text in mind.
+source text in mind. Limited Utf8 support is included.
 
-See [`next`](@ref) for its central function.
-
-
-methodreads a sequence of bytes which form a raw token,
-and returns its "token class".
-
-
-which is defined as follows:
-
-0 bytes if end-of data is reached, else:
-a sequence b0, b1, ..., bn bytes is .returns 
-syntax definition is given using "byte classes":
-syntax[b+1] is a bitfield defining the byte class of byte b.
-
-A (raw) token returned by a ByteLexer is a sequence of bytes withthe following property:
-
-Bits 27..31: byte class, values 0..26. Any token with byte classes
-for tokens
-
-Bits 0..26: bit i set === byte is allowed as following byte in byte class i
+See [`next`](@ref) for its central function and 
+[addcategory`](@ref) for setting up an instance. Constructor creates a
+lexer with empty syntax. Add character categoryes with *addcategory*
 """
 struct ByteLexer <: AbstractLexer
-    source :: IOShared # lexer sets mark always to the begin of the current token.
-    syntax::Vector{UInt32} # Bits: character class of 
+    io :: IOShared # lexer sets mark always to the begin of the current token.
+    syn:: Vector{UInt32} # structure defining byte and byte sequence categories for next(..) 
+    function ByteLexer(io :: IOShared)
+        new(io,Vector{UInt32}(zero(UInt32),256))
+    end
 end
 
 
+"peek byte at offset from current read position"
+function byte(bl::ByteLexer, ofs::UInt32) 
+    #@boundscheck checklimit(lb.io.readofs+ofs,bl.io.writeofs)
+    ensure_readable(bl.io,ofs+1)
+    @inbounds byte(bl.io.buffer,bl.io.readofs+ofs)
+end
+
+
+
+"""
+    next(bl:ByteLexer) :: Nibble
+
+reads a sequence of bytes which form a raw token,
+and returns a raw token category according to bl.syn.
+The bytes read are not returned as token, they are 
+defined by the mark position (begin of byte sequence) and 
+the read position (end of byte sequence) of bl.io.
+
+Next step is processing a regular token from the raw token,
+typical methods are [`token`](@ref), [`key`](@ref),
+[`sym`](@ref), [`unquote`](@ref), [`unescape`](@ref)
+
+next supports IOShared with data source attached. However, for
+efficiency, fillup of bl.io-s internal buffer is made only once,
+requesting bl.io.preferredLimit/2 bytes. Set preferredLimit large
+enough to cover all valid token sizes.
+"""
 function next(bl:ByteLexer) :: Nibble 
-    mark(bl.source)
-    fillup(bl.source,1)
-    bl.source.writeofs==bl.source.readofs && return Nibble(0) # EOD
-    class = syntax[]
-        < count && io.ioread
-
+    fillup(bl.io,bl.io.preferredlimit>>>1) # once and here to guarantee stable offsets
+    while true
+        # parse a raw token and its (lexer) category 
+        endofs = mark(bl.io)
+        bl.io.writeofs==endofs && return Nibble(0) # EOD
+        # we have at least 1 byte readable ==> defines category to return
+        b0 = byte(bl.io.buffer,bl.io.readofs)
+        syn0 = bl.syn[b0+1]
+        category = syn0&0x1F # 5 bits
+        synbit = 32<<category # bit in syn für Folgebytes
+        while ((endofs+=1)<=bl.io.writeofs) && (bl.syn[byte(bl.io.buffer,endofs)+1]&synbit > 0)
+        end
+        bl.io.readofs = endofs
+        # we have read a raw token. exit if this raw token is not to be skipped
+        category<=15 && return Nibble(category)
+    end
 end
 
+
+"""
+    init(bl::ByteLexer,category::UInt8, first:: Vector{UInt8}, follow:: Vector{UInt8})
+
+defines the byte category *category* in bl. 
+
+category: a value 0..26. Values 0..15 are byte categoryes reported in raw tokens
+by [`next`](@ref), values 16..26 are used to define byte sequences which are
+to be skipped. Typically used for white space and comments terminated by end-of-line.
+
+A raw token of category *category* begins with a byte found in first and contains all
+following bytes as long as they are listed in *follow*.
+
+The compiled vector bl.syn has the following structure:
+
+bl.syn[*b*+1] contains a bitfield defining which byte categoryes byte *b* belongs to.
+
+Bits 0..4: byte category, values 0..26. Values 0..15 are raw token categories
+returned by [`next`](@ref). Values>15 are raw tokens which are skipped.
+Typical use: while space, comment ending with end-of-line
+
+Bits 5..31: bit i+5 is set iff *b* is accepted as a following byte in byte category i
+
+addcategory is cumulative: addcategory(category,fi1,fo1);addcategory(category,fi2,fo2) is equivalent
+to addcategory(category,push!(fi1,fi2),push!(fo1,fo2)
+"""
+function addcategory(bl::ByteLexer,category::UInt8, first:: Vector{UInt8}, follow:: Vector{UInt8})
+    @boundscheck checklimit(category,26)
+    bitflag = 32<<category
+    for b in first
+        bl.syn[b+1] &= ~31
+        bl.syn[b+1] |= category
+    end
+    for b in follow
+        bl.syn[b+1] |= bitflag
+    end
+end
+
+
+"""
+    addcategory(bl::ByteLexer,category::UInt8, first:: String, follow:: String)
+
+limited unicode support for ByteLexer.
+
+ASCII characters with one code unit c0: treatment as byte. 
+
+characters in first encoded in 2 Utf8 code units *c0*, *c1*: 
+set category for c0. error if c0 has already a category different from 0 and *category*
+in first: add c0 to are processed like this:
+
+ 
+A character c in *first* is processed like this:
+ are processed this way:
+ 
+function addcategory(bl::ByteLexer,category::UInt8, first:: String, follow:: String)
 
 #"Lexer elements are tokens"
 #Base.eltype(::Type{AbstractLexer}) = Token
@@ -157,7 +235,7 @@ for recognizing a token category and termination of a token.
 """
 struct Lexer{T} <: AbstractLexer
     source :: IOShared # lexer sets mark always to the begin of the current tokensource line
-    class::T # character class definition
+    category::T # character category definition
 
     sym::LexerTable # list of defined tokens of type T_SYMBOL
     key::LexerTable # list of defined tokens of type T_KEY
@@ -186,7 +264,7 @@ for recognizing a token category and termination of a token.
 """
 mutable struct ByteLexer{M<:Union{Nothing,Vector[Regex]}, E<:Union(Nothing,)} <: AbstractLexer
     source :: IOShared # lexer sets mark always to the begin of the current source line
-    cls::Vector{UInt32} # character class definition
+    cls::Vector{UInt32} # character category definition
     sym::LexerTable # list of defined tokens of type T_SYMBOL
     key::LexerTable # list of defined tokens of type T_KEY
 

@@ -103,24 +103,26 @@ mutable struct IOShared <: IO
     writeofs :: UInt32 # write (append) position offset / end of defined data
     shared :: UInt32 # offset in buffer behind last shared byte (0: nothing shared)
     mark :: UInt32 # offset of data not to flush/forget. typemax: no active mark
-    limit ::  UInt32 # buffer limit for read/write operations, memory above is used by put function
-    preferredlimit ::  UInt32 # limit in case of reallocation due to sharing
+    limit :: UInt32 # buffer limit for read/write operations, memory above is used by put function
+    preferredlimit :: UInt32 # limit in case of reallocation due to sharing
+    registered :: Vector{HybridFly} # true: mark is always 0 (offsets are guaranteed not to change)
     io::MaybeIO # nothing or if ioread: source for fillup, else target for flush
+    eolRemoved :: Int32 # <0: undefined. else: no. of eol bytes which were removed from buffer by reorg-s
+    eol :: UInt8 #  marker byte of an end-of-line-sequence (default: 10, change to 13 for windows or Mac text files)
     ioread :: Bool # true: io is source for fillup. false: io is target for flush or nothing
     compressOnPut :: Bool # true: put does lookup content, share instead of append if found
-    registered :: Vector{HybridFly} # true: mark is always 0 (offsets are guaranteed not to change)
     function IOShared(io::MaybeIO,ioread::Bool,limit::UInt32) 
         ioread && io===nothing && error("ioread must be false if io is nothing")
         z = zero(UInt32)
         s = _string_n(limit)
-        new(s,z,z,z,NOMARK,limit,limit,io,ioread,false,Vector{HybridFly}())
+        new(s,z,z,z,NOMARK,limit,limit,Vector{HybridFly}(),io,-1,10,ioread,false)
     end
     function IOShared(offset::UInt32, size::UInt64, s::String)
         @boundscheck checkrange(offset,size,s)
         size32= UInt32(size) # check on overflow necessary: cannot handle too long strings
         preferredlimit = max(size32,DEFAULTLIMIT) # well ... just a very simple guess
         limit = UInt32(ncodeunits(s)) # check on overflow necessary: cannot handle too long strings
-        new(s,offset,offset+size32,offset+size32,NOMARK,limit,preferredlimit,nothing,false,false,Vector{HybridFly}())
+        new(s,offset,offset+size32,offset+size32,NOMARK,limit,preferredlimit,Vector{HybridFly}(),nothing,-1,10,ioread,false))
     end
 end
 
@@ -1200,3 +1202,46 @@ function checkrange(offset::UInt32, size::UInt64, io::IOShared)
     checklimit(io.readofs,offset)
 end
 
+
+"""
+    linepos(io::IOShared) :: Pair{Int,Int}
+
+return -1 => -1 (undefined) or lineNo =>index of the current read position.
+lineNo and index are 1-based (first byte of a file has (1,1) as its linepos)
+
+text line structure is undefinded by default. 
+To enable line number tracking, call [`tracklines`](@ref).
+
+linepos is not cheap: it scans for end-of-line markers throughout the
+internal buffer, which is quite expensive for large buffers. It is
+intended for error reporting in parsers.
+
+Consider reading complete lines and counting lines in application code,
+if you frequently need line number information.
+
+"""
+function linepos(io::IOShared) :: Pair{Int,Int}
+    io.eolRemoved<0 && return -1 => -1
+    lineno = io.eolRemoved
+    ofs = 0%UInt32 # position of begin of line 
+    while (lineno += 1;oeol=locate(io.eol,ofs,(io.readofs-ofs)%UInt64,io.buffer))<io.readofs
+        ofs = oeol+1
+    end
+    return lineno => (io.readofs-ofs+1)%Int
+end
+
+"""
+    tracklines(io::IOShared, eol::UInt8, linesRemoved::Int)
+
+activate line number tracking for *io*, using *eol* as marker byte for an end-of-line sequence
+and initialize the number of already removed lines with *linesRemoved*. Call it immediately 
+after constructing io with *linesRemoved*==0.
+
+Line number tracking has its price: it requires scanning for end-of-line markers in
+possibly huge text buffers. Therefore, it is disabled by default.
+"""
+function tracklines(io::IOShared, eol::UInt8, linesRemoved::Int)
+    io.eol = eol
+    io.linesRemoved = linesRemoved
+    return nothing
+end
