@@ -4,20 +4,30 @@ using MurmurHash3
 #using BitFlags
 
 include("checks.jl")
+export checkrange,checklimit
+
+include("nibble.jl")
+export Nibble, nibble
+
 include("abstracttoken.jl")
-export AbstractToken, offset, isdirect, category, TCategory, usize
-export subtoken, tread, twrite
+export AbstractToken, usize, category
+export offset, isdirect, subtoken
+
 # all TCategory values and its string macros are exported by abstracttoken.jl
 
 include("substring.jl")
-include("nibble.jl")
+export substring, sswrite
+
 include("packed31.jl")
 
+
 include("flytoken.jl")
-export DirectFly
+export FlyToken, DirectFly, BufferFly, HybridFly
+export DToken, DIRECT_NOTHING, DIRECT_MISSING
+
 
 include("token.jl")
-export Token, BToken
+export Token, BToken, HToken
 
 include("search.jl")
 
@@ -28,9 +38,11 @@ export IOShared,modify!
 include("tokenvector.jl")
 export TokenVector, TokenTree
 include("match.jl")
-include("nibblevector.jl")
+export match, Matcher, ExactMatcher, AnyByteMatcher, AnyStringMatcher
+#include("nibblevector.jl")
+
 include("lexer.jl")
-export AbstractLexer, Lexer
+export AbstractLexer, ByteLexer, next, addcategory
 #export
 
 end # module

@@ -1,7 +1,7 @@
 """
 variant: test bloomfilter first
 """
-function _searchindex_string(s::String, t::String, i::Integer,sv::MaybeVector==nothing)
+function _searchindex_string(s::String, t::String, i::Integer,sv::MaybeVector=nothing)
     n = sizeof(t)
     m = sizeof(s)
     if n == 0

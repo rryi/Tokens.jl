@@ -29,6 +29,9 @@ const EXPECTED_TOKENSIZE = 10
 
 TokenVector{T}(undef::UndefInitializer, n) where T = TokenVector{T}(undef,n,EXPECTED_TOKENSIZE)
 
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# TODO elegante Methode den externen token Type aus einer Tokenvector{T} instanz zu ermitteln.
+
 function TokenVector{T}(undef::UndefInitializer, vectorsize, tokensize) where T
     ret = TokenVector{T}(IOShared(vectorsize*tokensize))
     resize!(ret.vec,vectorsize)
@@ -159,21 +162,27 @@ end
 
 
 "Resize tv to contain n elements. If n is smaller than the current collection length, the first n elements will be retained. If n is larger, the new elements are set to nothing."
-function Base.resize!(tv::TokenVector{F}, n::Integer) where {F<:FlyToken,T<:Union{Nothing,Missing,Token{F}}}
+function Base.resize!(tv::TokenVector{T}, n::Integer) where T<:Union{Nothing,Missing,Token{BufferFly},Token{HybridFly}}
     oldsize = length(tv.vec)
     resize!(tv.vec,n)
-    t = F(nothing) # initialization value
+    t = HybridFly(nothing) # initialization value
     while oldsize < n
         oldsize += 1
         tv.vec[oldsize] = t
     end
 end
 
+"store content of item in heap of tv and return a FlyToken referencing that content"
+function _put(tv::TokenVector{T}, item) where T
+    if HToken <: T 
+        return hf(put(tv.heap,item,HToken).fly)
+    else
+        return hf(put(tv.heap,item,BToken).fly)
+    end
+end
 
-"inserts a copy of item with content in tv.heap (or direct)"
-Base.insert!(tv::TokenVector{F}, index::Integer, item::Token{F}) where F  = insert!(tv.vek,index,put(tv.heap,item).fly)
-
-
+"inserts a copy of item with content in tv.heap (or direct) as an element in tv at *index*. item can be anything accepted by token constructor"
+Base.insert!(tv::TokenVector{T}, index::Integer, item) where T = insert!(tv.vek,index,_put(tv,item))
 
 function Base.append!(tv::TokenVector{T},items::AbstractVector{S}) where {T, S }
     n = length(items)
@@ -190,11 +199,11 @@ end
 # iterate defined for AbstractVector
 
 "copy shares content readonly, source keeps its write rights on its buffer"
-Base.copy(tv::TokenVector{F}) where F <: FlyToken = TokenVector{F}(copy(tv.vec),copy(tv.heap))
+Base.copy(tv::TokenVector{T}) where T = TokenVector{T}(copy(tv.vec),copy(tv.heap))
 
 
 "fill with anything that can be converted (via constructor) to a Token"
-function Base.fill!(tv::TokenVector{F}, s) where F <: FlyToken
+function Base.fill!(tv::TokenVector{T}, s) where T
     t = Token{F}(s)
     t = put(tv.heap,t)
     fill!(tv.vec,t.fly)

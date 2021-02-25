@@ -42,7 +42,7 @@ const HToken = Token{HybridFly}
 # Generation of the string literal macros for tokens
 
 #= variable type generation - may cause type instability
-for cat in instances(TCategory)
+for cat in instances(Nibble)
     eval(quote
         macro $(Symbol(Symbol(cat),"_str"))(txt)
             if ncodeunits(txt)>7
@@ -57,16 +57,17 @@ for cat in instances(TCategory)
 end
 =#
 
-
-for cat in 0:15
-    ncat = Nibble(cat)
-    ccat = Char(cat<=9 ? '0'+cat : 'A'+cat-10)
-    eval(quote
-        macro $(Symbol('D',ccat,"_str"))(txt)
-            :(DirectFly(:(Nibble($cat),$txt)))
-        end
-        export @$(Symbol('D',ccat,"_str"))
-    end)
+for ttype in ['D','H','B']
+    for cat in 0:15
+        ncat = Nibble(cat)
+        ccat = Char(cat<=9 ? '0'+cat : 'A'+cat-10)
+        eval(quote
+            macro $(Symbol(ttype,ccat,"_str"))(txt)
+                :($(Symbol($ttype,"Token"))(Nibble($cat),$txt))
+            end
+            export @$(Symbol('D',ccat,"_str"))
+        end)
+    end
 end
 
 # TODO ditto HToken, BToken
@@ -93,29 +94,29 @@ HToken(t::HToken) = t
 BToken(t::BToken) = t
 BToken(t::HToken) = isdirect(t) ? BToken(df(t.fly)) : BToken(bf(t.fly),t.buffer)
 
-Token{T}(cat::TCategory, s::String) where T = @inbounds Token{T}(cat,0,usize(s),s)
-Token{T}(cat::TCategory) where T = @inbounds Token{T}(cat,EMPTYSTRING)
+Token{T}(cat::Nibble, s::String) where T = @inbounds Token{T}(cat,0,usize(s),s)
+Token{T}(cat::Nibble) where T = @inbounds Token{T}(cat,EMPTYSTRING)
 Token{T}(t::AbstractToken) where T = Token{T}(category(t),0,usize(t),substring(t))
 
 
-Base.@propagate_inbounds function BToken(cat::TCategory,offset::UInt32, size::UInt64, s::String)
+Base.@propagate_inbounds function Token{BufferFly}(cat::Nibble,offset::UInt32, size::UInt64, s::String)
     size == 0 && return BToken(cat)
     BToken(BufferFly(cat,size)+offset,s)
 end
 
 
-Base.@propagate_inbounds function HToken(cat::TCategory,offset::UInt32, size::UInt64, s::String)
+Base.@propagate_inbounds function HToken(cat::Nibble,offset::UInt32, size::UInt64, s::String)
     size <= MAX_DIRECT_SIZE && return HToken(DirectFly(cat,offset,size,s))
     HToken(BufferFly(cat,size)+offset,s)
 end
 
 
-Token{T}(cat::TCategory,s::SubString{String}) where T = 
-  Token{T}(cat,s.offset,ncodeunits%UInt64,s.string)
+Token{T}(cat::Nibble,s::SubString{String}) where T = 
+  Token{T}(cat,s.offset,usize(s),s.string)
 
 
-Token{T}(cat::TCategory,s::AbstractString)  where T= 
-  Token{T}(cat,s.offset,ncodeunits%UInt64,string(s))
+Token{T}(cat::Nibble,s::AbstractString)  where T = 
+  Token{T}(cat,string(s))
 
 
 Base.@propagate_inbounds function BToken(offset::UInt32, size::UInt64,t::Union{Token,DirectFly}) 
@@ -287,7 +288,7 @@ function Base.read(io::IO, ::Type{HToken})
         t = read(io,cat_size,DirectFly)
         HToken(t)
     else
-        @inbounds HToken(TCategory(bits0_3(cat_size)), read(io,size,String))
+        @inbounds HToken(Nibble(bits0_3(cat_size)), read(io,size,String))
     end
 end
 

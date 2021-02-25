@@ -367,17 +367,19 @@ Pattern processing depends on token category:
 
  * T_TEXT: pattern is an exact string match
 
- * T_CHAR: pattern accepts lowercase and uppercase for every ASCII letter
-   (does not apply to unicode letters beyond ASCII range)
+ * T_CHAR: like T_TEXT, but pattern accepts lowercase and uppercase 
+   for every ASCII letter (does not apply to unicode letters beyond ASCII range)
 
- * T_STRUCT: for each byte position, a list of allowed byte values is specified. 
+ * T_LIST: for each byte position, a list of allowed byte values is specified. 
    
    All byte values in the pattern are treatet as exact match, except '^' which acts as
-   escape for a nonexact match. UTF8 encoded non-ASCII characters are allowed and are treated as an exact match .
+   escape for a nonexact match. UTF8 encoded non-ASCII characters are allowed and are treated as an exact match.
     
    The byte following a '^' specifies the type of match:
     
-    * ^^ exact match for '^'
+   * ^x.. a byte value specified in hexadecimal notation with two ASCII hex characters, indicated by ..
+
+   * ^^ exact match for '^'
 
     * ^? any byte value
 
@@ -387,10 +389,17 @@ Pattern processing depends on token category:
     
     * ^l any lower case ASCII letter
     
-    * ^U any upper case ASCII letter
+    * ^u any upper case ASCII letter
+
+    * ^î any identifier ASCII character: letter or digit
+
+    * ^r carriage return (^x0d)
+
+    * ^n newline (^x0a)
+
+    * ^t tab (^x09)
     
-    * ^x?? a byte value specified in hexadecimal notation with two ASCII hex characters
-    * ^b???????? a byte value specified in binary notation with eight ASCII digits
+    * ^b........ a byte value specified in binary notation with eight ASCII digits, indicated by .
 
     * ^[list] list is an ASCII character list, non-ASCII bytes are specified by one of
       the preceding escape notations 

@@ -29,7 +29,7 @@ idx[n+k+1] is 0, marking the end if the list of children
 """
 struct ITree{I<:Integer, NodeType} <: Tree{NodeType}
     idx ::Vector{I}
-    base :: Vector{NodeType}
+    base :: AbstractVector{NodeType}
 end
 
 

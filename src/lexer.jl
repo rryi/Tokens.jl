@@ -23,7 +23,8 @@ source text in mind. Limited Utf8 support is included.
 
 See [`next`](@ref) for its central function and 
 [addcategory`](@ref) for setting up an instance. Constructor creates a
-lexer with empty syntax. Add character categoryes with *addcategory*
+lexer with mostly empty syntax: only category 0 is defined, all bytes belong to it,
+no follower allowed. Add character categories with *addcategory*
 """
 struct ByteLexer <: AbstractLexer
     io :: IOShared # lexer sets mark always to the begin of the current token.
@@ -44,7 +45,7 @@ end
 
 
 """
-    next(bl:ByteLexer) :: Nibble
+    next(bl::ByteLexer) :: Nibble
 
 reads a sequence of bytes which form a raw token,
 and returns a raw token category according to bl.syn.
@@ -61,7 +62,7 @@ efficiency, fillup of bl.io-s internal buffer is made only once,
 requesting bl.io.preferredLimit/2 bytes. Set preferredLimit large
 enough to cover all valid token sizes.
 """
-function next(bl:ByteLexer) :: Nibble 
+function next(bl::ByteLexer) :: Nibble 
     fillup(bl.io,bl.io.preferredlimit>>>1) # once and here to guarantee stable offsets
     while true
         # parse a raw token and its (lexer) category 
@@ -82,20 +83,26 @@ end
 
 
 """
-    init(bl::ByteLexer,category::UInt8, first:: Vector{UInt8}, follow:: Vector{UInt8})
+    addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bool = true)
 
-defines the byte category *category* in bl. 
+defines/enhances the raw token category *category* in bl. 
 
-category: a value 0..26. Values 0..15 are byte categoryes reported in raw tokens
+category: a value 0..26. Values 0..15 are byte categories reported in raw tokens
 by [`next`](@ref), values 16..26 are used to define byte sequences which are
 to be skipped. Typically used for white space and comments terminated by end-of-line.
 
-A raw token of category *category* begins with a byte found in first and contains all
-following bytes as long as they are listed in *follow*.
+first and follow are iterators giving either UInt8 values or Char values.
+
+closure is only used for iterators which give Char values, explained below
+
+For UInt8 values, a raw token of category *category* begins with a byte found in first 
+and includes all following bytes as long as they are listed in *follow*.
+
+An error is reported if a byte in first already has a category different from *category*
 
 The compiled vector bl.syn has the following structure:
 
-bl.syn[*b*+1] contains a bitfield defining which byte categoryes byte *b* belongs to.
+bl.syn[*b*+1] contains a bitfield defining which byte categories byte *b* belongs to.
 
 Bits 0..4: byte category, values 0..26. Values 0..15 are raw token categories
 returned by [`next`](@ref). Values>15 are raw tokens which are skipped.
@@ -105,36 +112,136 @@ Bits 5..31: bit i+5 is set iff *b* is accepted as a following byte in byte categ
 
 addcategory is cumulative: addcategory(category,fi1,fo1);addcategory(category,fi2,fo2) is equivalent
 to addcategory(category,push!(fi1,fi2),push!(fo1,fo2)
+
+For first and follow being Char iterators, an attempt is made to define raw token
+categories for Char iterators, with the same idea as above: next(bl) should return
+a raw token of category *category* if the 1st Char is found in *first* and all following
+Char-s are found in *follow*. However, the restriction to byte values makes it impossible
+to achieve in more complex settings. We have the following, limited support for Char
+sequences including non-ASCII characters:
+
+> if bl.io begins with a character sequence s = s1, s2, ..sn with s1 found in first and 
+> s2..sn all found in follow, next(bl) will return a raw token of category *category*
+> at least of the length n
+
+If closure is true, it is further granted that the raw token will be a valid Utf8 
+string, i.e. it does not end with an incomplete Utf8 encoding. But in both cases,
+the returned raw token might be much longer than n.
+
+Even more critical: 
+
+>A returned raw token does not necessarily fulfil the condition that
+>the first Char is in *first* and all following Char-s are in *follow*.
+
+Reason: a character c encoded in n code units c1,...,cn in sfirst, will implicitly
+add all characters d encoded by code units d1,...dm to the category if d1==c1,
+and  will allow d as a following character if for each b in d1..dm there 
+exists a character e containing b as a code unit.
+
+To understand how it works, lets look at a character c encoded in n Utf8 
+code units *c1*, *c2*, ..., *cn*. 
+
+# Processing if closure==false
+
+## c in sfirst:
+
+Error if c1 has already a category in bl different from 0 and *category*.
+Add c1 to accepted first byte of category.
+Add c2,c3,...,cn to accepted follow bytes of category.
+
+## c in sfollow:
+Add c1,c2,...,cn to accepted follow bytes of category.
+
+# Processing if closure==true
+
+## c in sfirst:
+
+Error if c1 has already a category in bl different from 0 and *category*.
+Add c1 to accepted first byte of category.
+Add all bytes in binary pattern 0b10xxxxxxxx to accepted follow bytes of category.
+
+## c in sfollow:
+Add c1 and all bytes in binary pattern 0b10xxxxxxxx to accepted follow bytes of category.
+
+
 """
-function addcategory(bl::ByteLexer,category::UInt8, first:: Vector{UInt8}, follow:: Vector{UInt8})
+function addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bool = true)
     @boundscheck checklimit(category,26)
     bitflag = 32<<category
-    for b in first
-        bl.syn[b+1] &= ~31
-        bl.syn[b+1] |= category
+    elt = eltype(first)
+    etw = eltype(follow)
+    if elt != elw
+        error("first and follow must have same element type, but do not: eltype(first)=$elt , eltype(follow)=$elw")
     end
-    for b in follow
-        bl.syn[b+1] |= bitflag
+    if elt==UInt8
+        for b in first
+            oldsyn = bl.syn[b+1]
+            oldcat = (oldsyn&31) %UInt8
+            if oldcat >0 && oldcat != category
+                error("Byte $b already has a differing category: $oldcat")
+            end
+            bl.syn[b+1] = oldsyn-oldcat+category
+        end
+        for b in follow
+            bl.syn[b+1] |= bitflag
+        end
+    elseif elt==Char
+        utfContinue = Bitset(128:128+63) # all byte codes permitted in Utf8 as following byte
+        sfirst = Bitset()  
+        sfollow = Bitset()
+        for c in first
+            s = DToken(c)
+            push!(sfirst,codeunit(s,1))
+            if closure
+                union!(sfollow,utfContinue)
+            else
+                for i in 2:usize(s)
+                    push!(sfollow,codeunit(s,i))
+                end
+            end
+        end
+        for c in follow
+            s = DToken(c)
+            push!(sfollow,codeunit(s,1))
+            if closure
+                union!(sfollow,utfContinue)
+            else
+                for i in 2:usize(s)
+                    push!(sfollow,codeunit(s,i))
+                end
+            end
+        end
+        addcategory(bl,category,sfirst,sfollow)
+    else
+        error("only UInt8 and Char element types are supported, but first has eltype $elt")
     end
+    return nothing
+end
+
+"""
+    closequote(bl::ByteLexer) :: HToken
+
+Complete a quoted raw token.
+A quoted token begins and ends with the same quote byte, e.g. '"'.
+The lexer category definition for a quoted category is: 
+
+ * begin with quote byte
+
+ * continue with anything except
+
+   * quote byte
+   * (optional) end-of-line marker
+   * (optional) escape character which changes lexing syntax for following bytes
+
+
+
+"""
+function closequote(bl::ByteLexer) :: HToken
 end
 
 
-"""
-    addcategory(bl::ByteLexer,category::UInt8, first:: String, follow:: String)
 
-limited unicode support for ByteLexer.
-
-ASCII characters with one code unit c0: treatment as byte. 
-
-characters in first encoded in 2 Utf8 code units *c0*, *c1*: 
-set category for c0. error if c0 has already a category different from 0 and *category*
-in first: add c0 to are processed like this:
-
- 
-A character c in *first* is processed like this:
- are processed this way:
- 
-function addcategory(bl::ByteLexer,category::UInt8, first:: String, follow:: String)
+#= unfertiges
 
 #"Lexer elements are tokens"
 #Base.eltype(::Type{AbstractLexer}) = Token
@@ -290,7 +397,7 @@ end
 
 
 
-
+=#
 
 
 

@@ -29,6 +29,8 @@ Base.@propagate_inbounds function Base.SubString{String}(ofs::UInt32, size::UInt
 end
 
 
+substring(s::AbstractString) = substring(s,firstindex(s),lastindex(s))
+
 substring(s::String,first::Integer,last::Integer) = SubString(s,first,last)
 
 "expensive default (converts to String!)"

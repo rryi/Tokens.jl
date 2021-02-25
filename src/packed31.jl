@@ -30,6 +30,8 @@ function bits0_3(v)
 end
 bits0_3(v::Packed31) = bits0_3(UInt32(v))
 
+nibble(v::Packed31) = bits0_3(v)
+
 "right shift by a nibble (4 bits)"
 bits4_30(v::Packed31) = UInt32(v) >> 4
 

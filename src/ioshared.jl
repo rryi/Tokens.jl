@@ -122,7 +122,7 @@ mutable struct IOShared <: IO
         size32= UInt32(size) # check on overflow necessary: cannot handle too long strings
         preferredlimit = max(size32,DEFAULTLIMIT) # well ... just a very simple guess
         limit = UInt32(ncodeunits(s)) # check on overflow necessary: cannot handle too long strings
-        new(s,offset,offset+size32,offset+size32,NOMARK,limit,preferredlimit,Vector{HybridFly}(),nothing,-1,10,ioread,false))
+        new(s,offset,offset+size32,offset+size32,NOMARK,limit,preferredlimit,Vector{HybridFly}(),nothing,-1,10,ioread,false)
     end
 end
 
@@ -1158,9 +1158,6 @@ function Base.take!(io::IOShared)
     io.readofs = io.writeofs = 0
     return ss
 end
-
-
-@inline Base.ensureroom(io::IOBuffer, nshort::Int) = ensurewritable(io, UInt32(nshort))
 
 
 @noinline function Base.close(io::IOShared)

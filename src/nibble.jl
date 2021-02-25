@@ -15,6 +15,19 @@ function Nibble(v::Integer) ::Nibble
     reinterpret(Nibble,v%UInt8)
 end
 
+
+"""
+    nibble(x::T)
+
+For types T which include a nibble field, define nibble(..)
+to extract that field. 
+
+Recommended for bitfield-like types,  which have one exactly one Nibble field.
+
+"""
+function nibble end
+
+
 Base.convert(::Type{UInt8}, x::Nibble) = reinterpret(UInt8,x)
 
 Base.convert(::Type{Nibble}, x::UInt8) = Nibble(x)

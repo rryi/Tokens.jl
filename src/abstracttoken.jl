@@ -146,34 +146,89 @@ function category(t::AbstractToken)
 end
 
 
+# Token category default definitions
+# use is optional, except in Token constructors
+# 
+# categories are ordered by groups
+
+
+## Category group 1: used in Token constructors and parsers
+
 """
-OUTDATED!!
+# T_END = 0
 
-Token category default definitions
+A token signaling some end of data. 
 
-This Enum contains a set of quite generic token categories. They are used
-to notate token constants as generalized string constants, and in token constructors
-if no category is given. However an application can redefine the meaning of categories 
-within their own context.
+Token constructors with argument *nothing* create a token of this
+category and empty content. An empty T_END token is also returned by lexers if an attempt is made to read
+beyond end of data.
+
+It may contain a string, e. g. the end of a node
+in XML, or an end-of-line sequence.
+
+In many grammars, T_END tokens have a lexical
+representation and could be identified by a lexer. Common examples are tokens like
+"end", ")", "}", "]", ";". But the end of a semantical sequence can also be 
+defined by context data, like indentation level, or operator precedence rules,
+which have no lexical characterization. In such cases, T_END tokens are inserted 
+by the parser.
+
+In a  [`TokenTree`](@ref), for each token which can have children, there must be a 
+T_END Token to close the sequence of its children.
+"""
+const T_END = Nibble(0)
 
 
-# group (1): character sequences with fixed character class for 1st and subsequent characters
+"""
+# T_INT = 1
 
-## T_EOD = 0
+A sequence of digits. Lexers can allow a leading sign, like '+' or '-'.
 
-A token signaling some end of data.
-Token constructors with argument *missing* create a token of this
-category and empty content.
+Token constructors with an Integer argument create a token of category 
+T_INT and its decimal string representation as content.
+"""
+const T_INT = Nibble(1)
 
-A typical case for nonempty content is an end-of-line sequence.
 
-## T_WHITE = 1
+"""
+## T_REAL = 2
 
-A sequence of whitespace characters.
-May include end of line characters, if *T_EOD* is not used for end-of-line
-tokens.
+An optionally signed number with a decimal separator and/or decimal exponent.
 
-## T_IDENT = 2
+Token constructors with a Real argument create a token of category 
+T_REAL and its Utf8 string representation as content.
+"""
+const T_REAL = Nibble(2)
+
+
+"""
+## T_CHAR = 3
+
+Character token. Token content is usually one Utf8-coded character.
+Typical lexers recognize a string enclosed in single quotes as category T_CHAR,
+and will usually remove the leading and trailing quotes.
+
+Token constructors with an AbstractChar argument create a token of category 
+T_CHAR and its Utf8 string representation as content.
+"""
+const T_CHAR = Nibble(3)
+
+
+"""
+## T_TEXT = 4
+
+Some text which was not (fully) tokenized according to the preceding token categories.
+This is the default category for tokens used in general string processing.
+Example: text entities in XML. 
+
+A token constructor with a single AbstractString argument (which is no token)
+creates a token of category T_TEXT.
+"""
+const T_TEXT = Nibble(4)
+
+
+"""
+## T_IDENT = 5
 
 An identifier in a lexer context.
 
@@ -184,89 +239,80 @@ appear in a T_IDENT token.
 Lexers working on byte level might treat all Non-ASCII unicode characters
 either as letter or as non-letter. 
 
-## T_SPECIAL = 2
+A token constructor with a single Bool argument creates a token of category T_IDENT
+and content "false" or "true".
+"""
+const T_IDENT= Nibble(5)
+
+
+"""
+## T_SPECIAL = 6
 
 A sequence of special characters, which is not used as delimiter of
 another lexical construct like quotes, and not recognized as symbol.
 Lexers decide to report each special character as its own token, or
 report a contiguous sequence of special characters as one token.
 
-A token t with category T_SPECIAL and empty content is treated as
-missing value, i.e. ismissing(t) returns true. Lexers can return
-such a token on an attempt to read beyond end of data.
-
-## T_INT = 3
-
-A sequence of digits. Lexers can allow a leading sign, like '+' or '-'.
-
-Token constructors with an Integer argument create a token of category 
-T_INT and its decimal string representation as content.
-
-# group (2): lexer categories determined by 1st character
-
-## T_QUOTED = 4
-
-A string enclosed in double quotes '"'. Lexers will typically remove the leading
-and trailing quotes. Lexers can recognize escape rules, which allow to embed 
-double quotes within the string. Typical rules are doubling quotes inside,
-or escape prefixes like "\". 
-
-## T_CHAR = 5
-
-Character token. Token content is usually one Utf8-coded character.
-Typical lexers recognize a string enclosed in single quotes as category T_CHAR,
-and will usually remove the leading and trailing quotes.
-
-Token constructors with a Char argument create a token of category 
-T_CHAR and its Utf8 string representation as content.
-
-# group (3): more complex lexer tokens
-
-## T_REAL = 7
-
-An optionally signed number with a decimal separator and/or decimal exponent.
-
-Token constructors with a Real argument create a token of category 
-T_REAL and its Utf8 string representation as content.
+Token constructors with argument *missing* create a T_SPECIAL token
+with empty content.
+"""
+const T_SPECIAL = Nibble(6)
 
 
+
+## Category group 2: used in lexers 
+
+"""
+## T_QUOTED = 7
+
+A string enclosed in some form of quotes. 
+
+Double quotes are a typical case. Parsers will normally remove the leading
+and trailing quotes, and resolve escape sequences. Common escape rules are 
+doubling quotes inside a quoted string, or the use of a dedicated escape character,
+like backslash. 
+"""
+const T_QUOTED = Nibble(7)
+
+
+
+
+"""
 ## T_COMMENT = 8
 
 comment. Typically contains the pure comment text, without delimiters.
 Delimiters may be accessible via lexer context. Many computer languages support
 different comment flavours like inline, rest of line or multiline comments.
+"""
+const T_COMMENT = Nibble(8)
 
 
-# group (4): higher level categories, mostly used in parsers and TokenTree
 
-## T_TEXT = 9
-
-Some text which was not (fully) tokenized according to the preceding token categories.
-This is the default category for tokens used in general string processing.
-Example: text entities in XML. 
-
-A token constructor with a single AbstractString argument (which is no token)
-creates a token of category T_TEXT.
+# group (3): higher level categories, intended for parsers and token trees
 
 
-## T_END = 10
+"""
+## T_KEY = 11
 
-End of some token sequence. It may contain a string, e. g. the end of a node
-in XML, or may be an empty token. In many grammars, T_END tokens have a lexical
-representation and could be identified by a lexer. Common examples are tokens like
-"end", ")", "}", "]", ";". But the end of a semantical sequence can also be 
-defined by context data, like indentation level, or operator precedence rules,
-which have no lexical characterization. In such cases, T_END tokens are inserted 
-by the parser.
+Identifier recognized as keyword. 
 
-In a  [`TokenTree`](@ref), for each token having of one of the following
-categories, there must be a T_END Token to close the sequence of its
-children.
+Lexers may support different nonations for a keyword, and return a unique 
+'canonical' representation,
+e. g. converting SQL keywords to uppercase. If all T_KEY strings have a
+canonical representation with less than 8 code units, your application could
+restrict T_KEY tokens to type DirectFly. Even if the grammar has longer keywords,
+you can define a short form fitting into a DirectFly as canonical representation,
+to enable use of DirectFly in the following processing steps.
 
-An empty T_END token could be returned by lexers if an attempt is made to read
-beyond end of data.
+Reserved words in programming languages are usually tokenized as T_KEY.
+In a TokenTree, they can have children, e. g. condition and action for
+control structures like IF/THEN/ELSE or FUNCTION parameters and code.
+"""
+const T_KEY = Nibble(11)
 
-## T_SYMBOL = 11
+
+"""
+## T_SYMBOL = 12
 
 One or more special characters which form a semantically interpreted
 symbol, e.g. "*", ">>>" or "+=". A lexer may accept different notations for the
@@ -283,37 +329,36 @@ A token t of category T_SYMBOL and empty content is regarded a missing
 value, i.e. ismissing(t) returns true.
 
 
-## T_KEY = 12
+"""
+const T_SYMBOL = Nibble(12)
 
-Identifier recognized as keyword, typically a FlyToken. Lexers may support
-different nonations for a keyword, and return a unique 'canonical' representation,
-e. g. converting SQL keywords to uppercase. If all T_KEY strings have a
-canonical representation with less than 8 code units, your application could
-restrict T_KEY tokens to type DirectFly. Even if the grammar has longer keywords,
-you can define a short form fitting into a DirectFly as canonical representation,
-and restrict T_KEY tokens to DirectFly.
 
-Reserved words in programming languages are usually tokenized as T_KEY.
-In a TokenTree, they can have children, e. g. condition and action for
-control structures like IF/THEN/ELSE or FUNCTION parameters and code.
 
-## T_PI = 13
 
-processing instruction. In a TokenTree, it may have children which represent 
+"""
+## T_CMD = 13
+
+embedded comamnds and processing instructions. 
+
+In a TokenTree, it may have children which represent 
 the parsed content of the instruction.
 
-A lexer will typically identify a processing instruction by some unique prefix
-and suffix, return the text between as unparsed text in a T_PI
-token, and make prefix and suffix accessible via its context.
-It-s up to the caller to parse the T_PI content (e.g. by calling another Lexer).
+A parser will typically identify a processing instruction by some unique prefix
+and suffix. In the first stage, the text between prefix and suffix may be
+stored as unparsed text in a T_CMD token. When building a syntax tree,
+it might get parsed (probably with a different parser).
 
 Examples are DTD and PI in XML, embedded javascript code in HTML,
 processing instructions in text templates like XSLT.
 
-From a lexer-s view, T_PI is structurally the same as T_TEXT: a sequence of
-unparsed content with a delimiter sequence at its begin and end, 
+From a lexer-s view, T_CMD is structurally similar to quoted strings and comments: 
+a sequence of unparsed content with a delimiter sequence at its begin and end, 
 which is excluded from the returned token.
+"""
+const T_CMD = Nibble(13)
 
+
+"""
 ## T_STRUCT = 14
 
 structure: a node in TokenTree with children.
@@ -326,6 +371,11 @@ a static list of allowed keys exists.
 A specialized lexer may "abuse" T_STRUCT for a lexical structure, e.g. a match 
 against a certain regular expression, like a date format.
 
+"""
+const T_STRUCT = Nibble(14)
+
+
+"""
 ## T_LIST = 15
 
 list: a node in TokenTree with children.
@@ -334,35 +384,10 @@ like julia vectors or JSON arrays. Often, all children have the same data type.
 
 A specialized lexer may "abuse" T_LIST for a lexical structure, e.g. a match
 against a certain regular expression, like a date format.
-
-# special string literals for tokens
-
-For every enum value, a special string literal syntax is defined
-to create token literals of the appropriate category. Exampie:
-
-T_INT"123"
-
-generates a Token(T_INT,"123").
-
 """
-@enum TCategory :: UInt8 begin
-    T_EOD = 0
-    T_IDENT = 1
-    T_SPECIAL = 2
-    T_INT = 3
-    T_QUOTED = 4
-    T_CHAR = 5
-    T_EOL = 6
-    T_REAL = 7
-    T_COMMENT = 8
-    T_TEXT = 9
-    T_WHITE = 10
-    T_SYMBOL = 11
-    T_KEY = 12
-    T_PI = 13
-    T_STRUCT = 14
-    T_LIST = 15
-end
+const T_LIST = Nibble(15)
+
+
 
 
 """
@@ -467,7 +492,7 @@ Functions ncodeunits and sizeof are derived from usize
 """
 function usize end
 
-usize32(s::T) where T = usize(s)%UInt32
+usize32(s) = usize(s) % UInt32
 
 
 

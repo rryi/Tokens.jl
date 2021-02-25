@@ -111,6 +111,8 @@ bit 63 63 62 60 59 58 57 56 byte6 byte5 byte4 byte3 byte2 byte1 byte0
 """
 primitive type DirectFly <: FlyToken 64 end
 
+"alias name similar to HToken and BToken"
+const DToken = DirectFly
 
 """
 Flyweight token accomplished by a code unit buffer.
@@ -406,8 +408,8 @@ end
 
 ## special values for missing and nothing
 
-const DIRECT_NOTHING = DirectFly(Nibble(0))
-const DIRECT_MISSING = DirectFly(Nibble(1))
+const DIRECT_NOTHING = DirectFly(Nibble(T_END))
+const DIRECT_MISSING = DirectFly(Nibble(T_SPECIAL))
 Base.isnothing(t::FlyToken) = t & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_NOTHING
 Base.ismissing(t::FlyToken) = t & (DIRECT_SIZE_BITS | CATEGORY_BITS) == DIRECT_MISSING
 DirectFly(::Nothing) = DIRECT_NOTHING
