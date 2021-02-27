@@ -44,12 +44,18 @@ Base.promote_type(::Type{Nibble}, ::Type{Nibble}) = UInt8
 
 Base.promote_rule(::Type{Nibble}, ::Type{U}) where U<:Signed = Int64
 
-function Base.show(io::IO, v::Nibble) 
+
+function Base.Char(v::Nibble) 
     code = UInt8(v)
     if code>0x09
         code += 0x07
     end
-    print(io, Char('0'+code))
+    return '0'+code
+end
+
+
+function Base.show(io::IO, v::Nibble) 
+    print(io, Char(v))
 end 
     
 #Base.promote_rule(::Type{T}, ::Type{Nibble}) where T<:Enum  = T

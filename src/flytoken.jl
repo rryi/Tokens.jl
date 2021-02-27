@@ -492,10 +492,51 @@ Base.:|(f::F, orValue::T) where {F<:FlyToken,T<:Unsigned} = reinterpret(F,u64(f)
 Base.:&(f::F, andValue::T) where {F<:FlyToken,T<:Unsigned} = reinterpret(F,u64(f) & andValue)
 
 "add an offset to a FlyToken (error if isdirect(f)). DANGEROUS: no validity or overflow checks!!"
-function Base.:+(f::F, addValue::Int) where {F<:FlyToken} 
+function Base.:+(f::F, addValue::UInt32) where {F<:FlyToken} 
     isdirect(f) && error("cannot add offset to DirectFly")
     reinterpret(F,u64(f) + addValue)
 end
+
+
+## interpretation
+
+
+Base.@propagate_inbounds function Base.iterate(s::AbstractToken, i::Int=firstindex(s))
+    i > ncodeunits(s) && return nothing
+    b = codeunit(s, i)
+    u = UInt32(b) << 24
+    # code from String
+    #Base.between(b, 0x80, 0xf7) || return reinterpret(Char, u), i+1
+    # does work for valid Utf8 but does not detect illegal code: bytes C0, C1, F5..F8 are all illegal,
+    # according to wikipedia (referencing RFC3629), but are accepted here.
+    # we can spare one comparison by this code:
+    b >= 0x80 || return reinterpret(Char, u), i+1
+    return Base.iterate_continued(s, i, u)
+end
+
+function Base.iterate_continued(s::AbstractToken, i::Int, u::UInt32)
+    u < 0xc0000000 && (i += 1; @goto ret) # u<0x80000000 treated in iterate. all other u<0xc2000000 are illegal!! 
+    n = ncodeunits(s)
+    # first continuation byte
+    (i += 1) > n && @goto ret
+    @inbounds b = codeunit(s, i)
+    b & 0xc0 == 0x80 || @goto ret
+    u |= UInt32(b) << 16
+    # second continuation byte
+    ((i += 1) > n) | (u < 0xe0000000) && @goto ret
+    @inbounds b = codeunit(s, i)
+    b & 0xc0 == 0x80 || @goto ret
+    u |= UInt32(b) << 8
+    # third continuation byte
+    ((i += 1) > n) | (u < 0xf0000000) && @goto ret
+    @inbounds b = codeunit(s, i)
+    b & 0xc0 == 0x80 || @goto ret
+    u |= UInt32(b); i += 1
+@label ret
+    return reinterpret(Char, u), i
+end
+
+
 
 
 ## Serialization of DirectFly
@@ -546,11 +587,10 @@ function Base.codeunit(t::FlyToken, index::Int)
 end
 
 
-function Base.show(io::IO,t::FlyToken)
-    print(io,string(typeof(t)[1]))
-    show(category(t))
+function Base.show(io::IO,t::T) where T <: FlyToken
+    print(io, string(typeof(t))[1] * Char(category(t)))
     if isdirect(t)
-        Base.print_quoted(io, t)
+        Base.print_quoted(io, df(t))
     else
         print(io,'<',offset(t)%Int,',',usize(t)%Int,'>')
     end

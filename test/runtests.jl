@@ -1,17 +1,20 @@
 using Tokens
 using Test
 
-include("testtiny.jl")
-include("testoken.jl")
-include("testshared.jl")
+include("testpacked31.jl")
+include("testliterals.jl")
+include("testflytoken.jl")
+include("testtoken.jl")
+include("testioshared.jl")
 include("testvector.jl")
 include("testtree.jl")
 include("testlexer.jl")
-include("benchIOShared.jl")
 
 @testset "Tokens.jl" begin
     # Write your own tests here.
-    testtiny()
+    testpacked31()
+    testliterals()
+    testflytoken()
     testtoken()
     testshared()
     testvector()

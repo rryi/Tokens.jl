@@ -1,0 +1,29 @@
+Hi,
+
+I am working on package [(https://github.com/rryi/Tokens.jl)], it is in an early state (not registered, surely with lots of bugs), but now it compiles without error messages.
+
+After `using Tokens`, I get the following "internal error" in the julia workspace viewer:
+![2021-02-25 14_18_27-? flytoken jl - Tokens - Visual Studio Code](https://user-images.githubusercontent.com/26365322/109164050-43138400-777a-11eb-9b50-48ba65a73797.png)
+
+I tried to reinstall VSCode plus julia plugin - error remains. I got the same error on another machine. 
+
+### Environment:
+
+- PC Ryzen 1700 with 16 GB RAM
+- Windows 10 Pro 20H1
+- VSCode 1.5.3, portable installation
+- julialang.language-julia 1.1.29
+
+### Steps to reproduce:
+
+ - install VSCode and julia plugin
+ - get Tokens package, commit 606345c82baf64df9fa76fd99b547d73eaa7b9ce
+ - open Tokens folder in VSCode
+ - switch julia environment to Tokens folder in VSCode (VSCode should ask for that)
+ - open julia workspace in VSCode
+ - enter REPL
+ - enter Pkg, instantiate, exit to julia REPL
+ - enter `using Tokens` in REPL
+
+
+I am quite new to julia-vscode, but very pleased with it and like its tools for code analysis and debugging. I have no idea about the error and 

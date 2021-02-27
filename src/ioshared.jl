@@ -108,7 +108,7 @@ mutable struct IOShared <: IO
     registered :: Vector{HybridFly} # true: mark is always 0 (offsets are guaranteed not to change)
     io::MaybeIO # nothing or if ioread: source for fillup, else target for flush
     eolRemoved :: Int32 # <0: undefined. else: no. of eol bytes which were removed from buffer by reorg-s
-    eol :: UInt8 #  marker byte of an end-of-line-sequence (default: 10, change to 13 for windows or Mac text files)
+    eol :: UInt8 #  last byte of an end-of-line-sequence (default: 10, change to 13 for Mac text files)
     ioread :: Bool # true: io is source for fillup. false: io is target for flush or nothing
     compressOnPut :: Bool # true: put does lookup content, share instead of append if found
     function IOShared(io::MaybeIO,ioread::Bool,limit::UInt32) 
@@ -295,6 +295,81 @@ function compressOnPut(heap::IOShared, compress::Bool)
 end
 
 
+"compute tuple () no. of lines before offset ofs, offset of begin of line containing position ofs)"
+function _lineofs(io::IOShared, ofs::UInt32) :: Tuple{UInt32,UInt32}
+    lines = zero(UInt32)
+    ofs = 0%UInt32 # position of begin of line 
+    while (oeol=locate(io.eol,ofs,(io.readofs-ofs)%UInt64,io.buffer))<io.readofs
+        ofs = oeol+one(UInt32)
+        lines += one(UInt32)
+    end
+    return (lines, ofs)
+end
+
+
+"""
+    _eolAdjust(io::IOShared, preservedOfs::UInt32) ::UInt32
+
+called if a reorg function wants to remove data section 0..preservedOfs,
+before content destruction.
+
+if eol processing is not activated (default), return preservedOfs
+
+Otherwise, counts all EOL markers in buffer up to offset preservedOfs and
+add io to eolRemoved. Return the offset of the begin of the last text line
+to be removed. This will enforce that buffer contains the whole line, e.g.
+to generate line listings in error situations.
+"""
+function _eolAdjust(io::IOShared, preservedOfs::UInt32)
+    if io.eolRemoved>=0
+        
+    end
+    return preservedOfs
+end
+
+
+
+
+"""
+    linepos(io::IOShared) :: Pair{Int,Int}
+
+return -1 => -1 (undefined) or lineNo =>index of the current read position in line.
+lineNo and index are 1-based (first byte of a file has (1,1) as its linepos)
+
+text line structure is undefinded by default. 
+To enable line number tracking, call [`tracklines`](@ref).
+
+linepos is not cheap: it scans for end-of-line markers throughout the
+internal buffer, which is quite expensive for large buffers. It is
+intended for error reporting in parsers.
+
+Consider reading complete lines and counting lines in application code,
+if you frequently need line number information.
+
+"""
+function linepos(io::IOShared) :: Pair{Int,Int} 
+    io.eolRemoved<0 && return -1 => -1
+    lines, ofs = _linepos(io,io.readofs)
+    return lines+io.eolRemoved+1 => io.readofs - ofs + 1
+end
+
+"""
+    tracklines(io::IOShared, eol::UInt8, linesRemoved::Int)
+
+activate line number tracking for *io*, using *eol* as marker byte for an end-of-line sequence
+and initialize the number of already removed lines with *linesRemoved*. Call it immediately 
+after constructing io with *linesRemoved*==0.
+
+Line number tracking has its price: it requires scanning for end-of-line markers in
+possibly huge text buffers. Therefore, it is disabled by default.
+"""
+function tracklines(io::IOShared, eol::UInt8, linesRemoved::Int)
+    io.eol = eol
+    io.linesRemoved = linesRemoved
+    return nothing
+end
+
+
 """
 move memory within an IOShared buffer: insert/delete at ofs
 
@@ -388,7 +463,13 @@ not recommended.
 """
 function _realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
     flush(io) # write to sink to decrease used area
-    preservedofs = min(io.readofs, io.mark) # begin of protected content which must be copied. end is io.writeofs
+    preservedOfs = min(io.readofs, io.mark) # begin of protected content which must be copied. end is io.writeofs
+    if io.eolRemoved >= 0
+        # we have EOL tracking. reduce preservedOfs such that is the begin of a text line.
+        # update io.eolRemoved with number of lines below preservedOfs 
+        (lines, preservedOfs) = _lineofs(io,preservedOfs)
+        io.eolRemoved += lines
+    end
     need = io.writeofs - preservedOfs + resize # minimum size of new buffer (without heap).
     @boundscheck begin
         (io.readofs <= ofs 
@@ -457,10 +538,10 @@ function _realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
         src = pointer(oldbuffer)
         newbuffer = io.buffer
         dst = pointer(newbuffer)
-        count = (ofs - preservedofs) %UInt # size of reserved content before ofs
+        count = (ofs - preservedOfs) %UInt # size of reserved content before ofs
         ## copy first part: preservedOfs..ofs
         ccall(:memcpy, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}, UInt),
-            dst, src+preservedofs, count)
+            dst, src+preservedOfs, count)
         # copy 2nd part: ofs..io.writeofs
         if resize<0
             count2 =  (io.writeofs-ofs+resize) %UInt
@@ -475,10 +556,10 @@ function _realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
                     dst+count+resize, src+ofs, count2)
             end
         end
-        ofs -= preservedofs
-        io.readofs -= preservedofs
-        io.mark != NOMARK && (io.mark -= preservedofs)
-        io.writeofs += resize-preservedofs
+        ofs -= preservedOfs
+        io.readofs -= preservedOfs
+        io.mark != NOMARK && (io.mark -= preservedOfs)
+        io.writeofs += resize-preservedOfs
     end
     io.shared = 0
     return ofs
@@ -569,15 +650,18 @@ function modify!(io::IOShared, ofs::UInt32, resize::Int)
             return ofs
         end
         # not enough space at end - can we reuse space at beginning?
-        flush(io)
-        preservepos = min(io.readofs,io.mark)
-        delta = io.shared%Int - preservepos # bytes deleteable at shared if <0
-        if io.writeofs+resize+delta <= io.limit
-            # removing obsolete content after shared is enough
-            _resize(io,io.shared,delta) # remove free space at beginning
-            ofs += delta
-            _resize(io,ofs,resize)
-            return ofs
+        if io.eolRemoved<0 
+            # we require no eol tracking, because it does not allow resize work with 0 < resize pos < readofs
+            flush(io)
+            preservedOfs = min(io.readofs,io.mark)
+            delta = io.shared%Int - preservedOfs # bytes deleteable at shared if <0
+            if io.writeofs+resize+delta <= io.limit
+                # removing obsolete content after shared is enough
+                _resize(io,io.shared,delta) # remove free space at beginning
+                ofs += delta
+                _resize(io,ofs,resize)
+                return ofs
+            end
         end
     end
     # nothing but realloc helps ...
@@ -1128,24 +1212,6 @@ function Base.peek(io::IOShared, size::UInt64)
 end
 
 
-"""
-    get(io::IOShared, ofs::UInt32, size::UInt64)
-
-lowlevel (fast) access to some buffer portion as a BToken, ignoring read or write position of io.
-
-ofs is an absolute offset into io.buffer.
-
-Bounds check ensures that io.buffer has a length of at least ofs+size, 
-but data may be unitialized if ofs+size>io.writeofs.
-
-The returned token is of category T_LIST. No check is made if it is valid Utf8.
-"""
-function get(io::IOShared, ofs::UInt32, size::UInt64)
-    checklimit(ofs+size,io.limit)
-    # reference string data in IOShared instance
-    @inbounds return BToken(ofs,size,_share(io,io.readofs+size))
-end
-
 ## other IO function overloads for IOShared
 
 Base.isreadable(io::IOShared) = true
@@ -1193,52 +1259,14 @@ function Base.empty!(io::IOShared)
 end
 
 
-
+#=
+# TODO unsystematic: here we test an absolute offsets, not relative to io.readofs
+# either make it internal by "_" prefix, or test relative
+"test if an offset range lies within readable data"
 function checkrange(offset::UInt32, size::UInt64, io::IOShared)
     checklimit(offset+size,io.writeofs)
     checklimit(io.readofs,offset)
 end
+=#
 
 
-"""
-    linepos(io::IOShared) :: Pair{Int,Int}
-
-return -1 => -1 (undefined) or lineNo =>index of the current read position.
-lineNo and index are 1-based (first byte of a file has (1,1) as its linepos)
-
-text line structure is undefinded by default. 
-To enable line number tracking, call [`tracklines`](@ref).
-
-linepos is not cheap: it scans for end-of-line markers throughout the
-internal buffer, which is quite expensive for large buffers. It is
-intended for error reporting in parsers.
-
-Consider reading complete lines and counting lines in application code,
-if you frequently need line number information.
-
-"""
-function linepos(io::IOShared) :: Pair{Int,Int}
-    io.eolRemoved<0 && return -1 => -1
-    lineno = io.eolRemoved
-    ofs = 0%UInt32 # position of begin of line 
-    while (lineno += 1;oeol=locate(io.eol,ofs,(io.readofs-ofs)%UInt64,io.buffer))<io.readofs
-        ofs = oeol+1
-    end
-    return lineno => (io.readofs-ofs+1)%Int
-end
-
-"""
-    tracklines(io::IOShared, eol::UInt8, linesRemoved::Int)
-
-activate line number tracking for *io*, using *eol* as marker byte for an end-of-line sequence
-and initialize the number of already removed lines with *linesRemoved*. Call it immediately 
-after constructing io with *linesRemoved*==0.
-
-Line number tracking has its price: it requires scanning for end-of-line markers in
-possibly huge text buffers. Therefore, it is disabled by default.
-"""
-function tracklines(io::IOShared, eol::UInt8, linesRemoved::Int)
-    io.eol = eol
-    io.linesRemoved = linesRemoved
-    return nothing
-end

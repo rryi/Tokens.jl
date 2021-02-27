@@ -246,7 +246,7 @@ end
     boundscheck will ensure valid sfirst, slast are existing index values
 
 """
-function match(matcher::ExactMatcher,ofs::UInt32,size::UInt64, s::String)
+function Base.match(matcher::ExactMatcher,ofs::UInt32,size::UInt64, s::String)
     n = ncodeunits(matcher.pattern)
     @boundscheck checklimit(ofs+size,s)
     m = size%Int
@@ -338,7 +338,7 @@ mutable struct AnyByteMatcher <: Matcher
 end
 
 
-function match(matcher::AnyByteMatcher,s::String, sfirst::Int, slast::Int)
+function Base.match(matcher::AnyByteMatcher,s::String, sfirst::Int, slast::Int)
     @boundscheck checkrange(s,sfirst,slast)
     @inbounds begin
         while sfirst <= slast

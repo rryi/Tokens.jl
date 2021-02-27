@@ -41,40 +41,24 @@ const HToken = Token{HybridFly}
 
 # Generation of the string literal macros for tokens
 
-#= variable type generation - may cause type instability
-for cat in instances(Nibble)
-    eval(quote
-        macro $(Symbol(Symbol(cat),"_str"))(txt)
-            if ncodeunits(txt)>7
-                :(BToken($($(cat)),$txt))
-            else
-                :(DirectFly($($(cat)),$txt))
-            end
-        end
-        export $(Symbol(cat))
-        export @$(Symbol(Symbol(cat),"_str"))
-    end)
-end
-=#
+# try export in eval             #:(:export, Symbol('@',$($(ttype)),$($(ccat)),"_str"))
 
 for ttype in ['D','H','B']
     for cat in 0:15
-        ncat = Nibble(cat)
         ccat = Char(cat<=9 ? '0'+cat : 'A'+cat-10)
         eval(quote
             macro $(Symbol(ttype,ccat,"_str"))(txt)
-                :($(Symbol($ttype,"Token"))(Nibble($cat),$txt))
+                :($(Symbol($(ttype),"Token"))(Nibble($($cat)),$txt))
             end
-            export @$(Symbol('D',ccat,"_str"))
         end)
+        s = Symbol('@',ttype,ccat,"_str")
+        @eval export $s
     end
 end
 
-# TODO ditto HToken, BToken
 
 function Base.show(io::IO,t::Token{T}) where T 
-    print(io, T <: HybridFly ? 'H' : 'B')
-    show(category(t))
+    print(io, T <: HybridFly ? 'H' : 'B',Char(category(t)))
     Base.print_quoted(io, t)
 end
 
@@ -94,9 +78,9 @@ HToken(t::HToken) = t
 BToken(t::BToken) = t
 BToken(t::HToken) = isdirect(t) ? BToken(df(t.fly)) : BToken(bf(t.fly),t.buffer)
 
-Token{T}(cat::Nibble, s::String) where T = @inbounds Token{T}(cat,0,usize(s),s)
-Token{T}(cat::Nibble) where T = @inbounds Token{T}(cat,EMPTYSTRING)
-Token{T}(t::AbstractToken) where T = Token{T}(category(t),0,usize(t),substring(t))
+Token{F}(cat::Nibble, s::String) where F<:FlyToken = @inbounds Token{F}(cat,0%UInt32,usize(s),s)
+Token{F}(cat::Nibble) where F<:FlyToken = @inbounds Token{F}(cat,EMPTYSTRING)
+Token{F}(t::AbstractToken) where F<:FlyToken = Token{F}(category(t),0%UInt32,usize(t),substring(t))
 
 
 Base.@propagate_inbounds function Token{BufferFly}(cat::Nibble,offset::UInt32, size::UInt64, s::String)
@@ -130,12 +114,12 @@ Base.@propagate_inbounds HToken(offset::UInt32, size::UInt64,t::Union{Token,Dire
 
 
 # conversions of standard types
-Token{T}(v::Integer) where T = Token{F}(T_INT,string(v))
-Token{T}(v::Real) where T =    Token{F}(T_REAL,string(v))
-Token{T}(v::Char) where T =    Token{F}(T_CHAR,v)
-Token{T}(v::Bool) where T =    Token{F}(T_KEY,string(v))
-Token{T}(v::AbstractString) where T = Token{F}(T_TEXT,v)
-Token{T}(offset::UInt32, size::UInt64,s::String) where T = Token{F}(T_TEXT,v)
+Token{F}(v::Integer) where F<:FlyToken = Token{F}(T_INT,string(v))
+Token{F}(v::Real) where F<:FlyToken =    Token{F}(T_REAL,string(v))
+Token{F}(v::Char) where F<:FlyToken =    Token{F}(T_CHAR,v)
+Token{F}(v::Bool) where F<:FlyToken=    Token{F}(T_KEY,string(v))
+Token{F}(v::AbstractString) where F<:FlyToken= Token{F}(T_TEXT,v)
+# was soll das? Token{F}(offset::UInt32, size::UInt64,s::String) = where F<:FlyToken Token{F}(T_TEXT,s)
 
 
 DirectFly(t::Token{T}) where T = isdirect(t) ? df(t.fly) : DirectFly(category(t),offset(t),usize(t),t.buffer)
@@ -253,24 +237,22 @@ function Base.hash(t::HToken, h::UInt)
 end
 
 
-# any advantage over default impl?? TODO -> look at generated default code
-# try & test with default impl!
 #=
-function Base.iterate(t::GenericToken, i::Integer=firstindex(s))
-    i == ncodeunits(t)+1 && return nothing
-    @boundscheck checkbounds(t, i)
-    y = iterate(t.buffer, t.offset + i)
-    y === nothing && return nothing
+function Base.iterate(t::Token, i::Integer=firstindex(t))
+    i > ncodeunits(t) && return nothing
+    @boundscheck checklimiti <= 0 && @boundscheck checkbounds(t, i) # ?? wozu??
+    o = offset(t)
+    if isdirect(t)
+        y = iterate(df(t.fly),i)
+    else
+        y = iterate(t.buffer, o + i)
+    end
     c, i = y
-    return c, i - t.offset
+    return c, i - o
 end
+=#
 
-function Base.getindex(t::BToken, i::Integer)
-    @boundscheck checkbounds(t, i)
-    @inbounds return getindex(t.buffer, offset(t) + i)
-end
-
-function Base.getindex(t::HToken, i::Integer)
+function Base.getindex(t::Token, i::Integer)
     @boundscheck checkbounds(t, i)
     @inbounds if isdirect(t)
         getindex(df(t.fly),i)
@@ -278,7 +260,7 @@ function Base.getindex(t::HToken, i::Integer)
         getindex(t.buffer, offset(bf(t.fly)) + i)
     end
 end
-=#
+
 
 
 function Base.read(io::IO, ::Type{HToken})

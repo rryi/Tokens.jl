@@ -40,6 +40,17 @@ hexadecimal character as string prefix to define type and category.
 E.g.: D2"hello" is equivalent to DToken(Nibble(2),"hello"), and
 HB"hello" will create HToken(Nibble(11),"hello").
 
+# token properties
+
+A token t :: T <: AbstractToken supports the following readonly properties,
+implemented by a getproperty method definition
+
+    * t.cat :: Nibble category of token, === category(t)
+
+    * t.ofs :: UInt32 offset into internal buffer, === offset(t)
+
+    * t.len :: UInt64 number of code units, === usize(t)
+
 
 # interface requirements
 
@@ -263,7 +274,7 @@ const T_SPECIAL = Nibble(6)
 ## Category group 2: used in lexers 
 
 """
-## T_QUOTED = 7
+## T_QUOTE = 7
 
 A string enclosed in some form of quotes. 
 
@@ -272,7 +283,7 @@ and trailing quotes, and resolve escape sequences. Common escape rules are
 doubling quotes inside a quoted string, or the use of a dedicated escape character,
 like backslash. 
 """
-const T_QUOTED = Nibble(7)
+const T_QUOTE = Nibble(7)
 
 
 
@@ -434,7 +445,7 @@ and content SubString(string(t),first,last).
 
 """
 function subtoken(t::T, first::Int, last::Int) where T<:AbstractToken
-    first <= last || return T(category(T))
+    first <= last || return T(category(t))
     @boundscheck begin
         checkbounds(t, first:last)
         @inbounds isvalid(t, first) || string_index_err(t, first)
@@ -510,7 +521,7 @@ Base.codeunit(t::AbstractToken) = UInt8
 
 Base.ncodeunits(t::AbstractToken) = usize(t)%Int
 
-
+#= too dangerous ... 
 ## special values for missing and nothing
 
 "AbstractToken uses category T_SYMBOL with usize 0 as encoding for missing"
@@ -518,7 +529,7 @@ Base.ismissing(t::AbstractToken) = category(t)==T_SPECIAL && usize(t)==0%UInt64
 
 "AbstractToken uses category T_SPECIAL with usize 0 as encoding for nothing"
 Base.isnothing(t::AbstractToken) = category(t)==T_EOL && usize(t)==0%UInt64
-
+=#
 
 
 #das stimmt so nicht!
@@ -543,4 +554,20 @@ end
 
 
 ## helpers ##
+
+
+## pseudo properties
+
+
+function Base.getproperty(a::AbstractToken, s::Symbol)
+    if s === :ofs
+        return offset(a)
+    elseif s === :len
+        return usize(a)
+    elseif s === :cat
+        return category(a)
+    else
+        return Core.getproperty(a, s)
+    end
+end
 
