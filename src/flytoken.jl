@@ -295,7 +295,7 @@ end
 token with given size, bounds-checked, offset 0
 """
 Base.@propagate_inbounds function BufferFly(cat::Nibble, size::UInt64)
-    @boundscheck checklimit(size,MAX_TOKEN_SIZE)
+    @boundscheck checkulimit(size,MAX_TOKEN_SIZE)
     if BUFFER_SPLIT_SIZE
         BufferFly(cat) | ((size&7)<<56 | (size>>>3)<<32)
     else
@@ -320,7 +320,7 @@ end
 Base.@propagate_inbounds function DirectFly(cat_size::Packed31)
     u = ((cat_size%UInt64) <<59) & CATEGORY_BITS
     s = bits4_30(cat_size)%UInt64
-    @boundscheck checklimit(s,MAX_DIRECT_SIZE)
+    @boundscheck checkulimit(s,MAX_DIRECT_SIZE)
     u |= ((s&7)<<56)
     df(u)
 end
@@ -357,7 +357,7 @@ DirectFly(cat::Nibble) = df( UInt64(cat)<<59 )
 
 "token with given size, bounds-checked, all code units are 0, prepared for unsafe_setcodeunit"
 Base.@propagate_inbounds function DirectFly(cat::Nibble, size::UInt64)
-    @boundscheck checklimit(size,MAX_DIRECT_SIZE)
+    @boundscheck checkulimit(size,MAX_DIRECT_SIZE)
     df(DirectFly(cat)) | (size << 56)
 end
 
@@ -389,7 +389,7 @@ end
 "token from a string constant (requires size<8)"
 function DirectFly(cat::Nibble, s::Utf8String)
     size = usize(s)
-    @boundscheck checklimit(size,MAX_DIRECT_SIZE)
+    @boundscheck checkulimit(size,MAX_DIRECT_SIZE)
     fly = DirectFly(cat,size)
     for i in 1:size
         fly = unsafe_setcodeunit(fly,i,codeunit(s,i))
@@ -419,7 +419,7 @@ HybridFly(::Missing) = hf(DIRECT_MISSING)
 BufferFly(::Nothing) = bf(DIRECT_NOTHING|NOTDIRECT_BIT)
 BufferFly(::Missing) = bf(DIRECT_MISSING|NOTDIRECT_BIT)
 
-Base.@propagate_inbounds DirectFly(offset::UInt32, size::UInt64,t::AbstractToken) = DirectFly(category(t),offset,size,t)
+Base.@propagate_inbounds DirectFly(offset::UInt32, size::UInt64,t::AbstractToken) = DirectFly(t.cat,offset,size,t)
 
 
 ## Token API methods ##
@@ -467,13 +467,13 @@ end
 
 
 ## helpers for IO
-Packed31(f::FlyToken)=Packed31(category(f)%UInt8, usize(f)%UInt32)
+Packed31(f::FlyToken)=Packed31(category(f)%UInt8, f.len%UInt32)
 
 ## Base operators and functions overloading ##
 
 
 function Base.String(d::DirectFly)
-    size = usize(d)
+    size = d.len
     s = Base._string_n(size)
     p = pointer(s)
     GC.@preserve s begin
@@ -543,7 +543,7 @@ end
 
 function Base.write(io::IO, t::DirectFly)
     write(io,Packed31(t))
-    for i in 1:usize(t)
+    for i in 1:t.len
         write(io, @inbounds codeunit(t,i))
     end
 end
@@ -576,7 +576,7 @@ end
 
 
 Base.@propagate_inbounds function byte(t::DirectFly, ofs::UInt32)
-    @boundscheck checkbyteofs(ofs,usize(t))
+    @boundscheck checkbyteofs(ofs,t.len)
     (255%UInt8) & (u64(t) >>> ((6-index)<<3))%UInt8
 end
 
@@ -588,11 +588,11 @@ end
 
 
 function Base.show(io::IO,t::T) where T <: FlyToken
-    print(io, string(typeof(t))[1] * Char(category(t)))
+    print(io, string(typeof(t))[1] * Char(t.cat))
     if isdirect(t)
         Base.print_quoted(io, df(t))
     else
-        print(io,'<',offset(t)%Int,',',usize(t)%Int,'>')
+        print(io,'<',offset(t)%Int,',',t.len%Int,'>')
     end
 end
 

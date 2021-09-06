@@ -142,7 +142,7 @@ function compress(tv::TokenVector{T},reserve::UInt32) where T
     heap = IOShared(totalsize)
     ret = TokenVector{T}(heap)
     compressOnPut(heap,true)
-    ii = sortperm(tv.vec,by = t -> -(usize(t)%Int) )
+    ii = sortperm(tv.vec,by = t -> -(t.len%Int) )
     for i in ii
         t = tv[i]
         if !isdirect(t) 

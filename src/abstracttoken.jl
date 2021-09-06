@@ -162,13 +162,31 @@ end
 # 
 # categories are ordered by groups
 
+#=
+const T_END = Nibble(0)
+const T_INT = Nibble(1)
+const T_REAL = Nibble(2)
+const T_CHAR = Nibble(3)
+const T_TEXT = Nibble(4)
+const T_IDENT= Nibble(5)
+const T_SPECIAL = Nibble(6)
+const T_QUOTE = Nibble(7)
+const T_OP = Nibble(8)
+const T_COMMENT = Nibble(9)
+const T_EXT = Nibble(10)
+const T_KEY = Nibble(11)
+const T_SYM = Nibble(12)
+const T_CMD = Nibble(13)
+const T_REC = Nibble(14)
+const T_LIST = Nibble(15)
+=#
 
 ## Category group 1: used in Token constructors and parsers
 
 """
 # T_END = 0
 
-A token signaling some end of data. 
+A token signalling some end of data. 
 
 Token constructors with argument *nothing* create a token of this
 category and empty content. An empty T_END token is also returned by lexers if an attempt is made to read
@@ -282,20 +300,60 @@ Double quotes are a typical case. Parsers will normally remove the leading
 and trailing quotes, and resolve escape sequences. Common escape rules are 
 doubling quotes inside a quoted string, or the use of a dedicated escape character,
 like backslash. 
+
+This category is simple to detect by a simple lexer (determined by its 1st character), 
+but may need post processing. See [`QuoteLA`](@ref) for an example.
+
 """
 const T_QUOTE = Nibble(7)
 
 
+"""
+## T_OP = 8
+
+A sequence starting with a special character like '+' and '-', which has several alternative
+lexical continuations to a complete token. The name OP was chosen to associate with
+"operator" or "option". Typical scenarios for '+' and '-':
+
+ * number scenario: a sign is immediately followed by a digit sequence.
+
+ * operator scenario: sign and optionally further special characters define an operator Symbol
+
+ * option scenario: a sign followed by an identifier, giving a set or unset option.
+
+A generic lexer will return a single character token of category T_OP, and the parser will
+read the next token to identify the scenario. 
+
+Alternatively, a lexer could return the char sequence of one of the given scenarios, and
+the parser will test the length and check for the other scenarios if length is 1. 
+See [`OpLA`](@ref) for an implementation.
 
 
 """
-## T_COMMENT = 8
+const T_OP = Nibble(8)
+
+
+
+"""
+## T_COMMENT = 9
 
 comment. Typically contains the pure comment text, without delimiters.
 Delimiters may be accessible via lexer context. Many computer languages support
 different comment flavours like inline, rest of line or multiline comments.
+
+Only simple cases like rest of line comments, end-of-line 
 """
-const T_COMMENT = Nibble(8)
+const T_COMMENT = Nibble(9)
+
+
+"""
+## T_EXT = 10
+
+Extension category.
+
+No predefined syntax or semantic, always application-specific.
+"""
+const T_EXT = Nibble(10)
 
 
 
@@ -323,7 +381,7 @@ const T_KEY = Nibble(11)
 
 
 """
-## T_SYMBOL = 12
+## T_SYM = 12
 
 One or more special characters which form a semantically interpreted
 symbol, e.g. "*", ">>>" or "+=". A lexer may accept different notations for the
@@ -336,12 +394,12 @@ application (and use DirectFly for symbols).
 In TokenTree, symbols can have children, to reflect the use of symbols
 as operators in common computer languages.
 
-A token t of category T_SYMBOL and empty content is regarded a missing
+A token t of category T_SYM and empty content is regarded a missing
 value, i.e. ismissing(t) returns true.
 
 
 """
-const T_SYMBOL = Nibble(12)
+const T_SYM = Nibble(12)
 
 
 
@@ -370,20 +428,20 @@ const T_CMD = Nibble(13)
 
 
 """
-## T_STRUCT = 14
+## T_REC = 14
 
-structure: a node in TokenTree with children.
+record structure: a node in TokenTree with children.
 
-T_STRUCT is recommended if children access is based on a key attribute which
+T_REC is recommended if children access is based on a key attribute which
 identifies them within the children list, like a field name in a julia struct or the
 attribute name in an XML item. Often, children have different data types and
 a static list of allowed keys exists.
 
-A specialized lexer may "abuse" T_STRUCT for a lexical structure, e.g. a match 
+A specialized lexer may "abuse" T_REC for a lexical structure, e.g. a match 
 against a certain regular expression, like a date format.
 
 """
-const T_STRUCT = Nibble(14)
+const T_REC = Nibble(14)
 
 
 """
@@ -445,7 +503,7 @@ and content SubString(string(t),first,last).
 
 """
 function subtoken(t::T, first::Int, last::Int) where T<:AbstractToken
-    first <= last || return T(category(t))
+    first <= last || return T(t.cat)
     @boundscheck begin
         checkbounds(t, first:last)
         @inbounds isvalid(t, first) || string_index_err(t, first)
@@ -519,21 +577,21 @@ function category end
 
 Base.codeunit(t::AbstractToken) = UInt8
 
-Base.ncodeunits(t::AbstractToken) = usize(t)%Int
+Base.ncodeunits(t::AbstractToken) = t.len%Int
 
 #= too dangerous ... 
 ## special values for missing and nothing
 
 "AbstractToken uses category T_SYMBOL with usize 0 as encoding for missing"
-Base.ismissing(t::AbstractToken) = category(t)==T_SPECIAL && usize(t)==0%UInt64
+Base.ismissing(t::AbstractToken) = t.cat==T_SPECIAL && t.len==0%UInt64
 
 "AbstractToken uses category T_SPECIAL with usize 0 as encoding for nothing"
-Base.isnothing(t::AbstractToken) = category(t)==T_EOL && usize(t)==0%UInt64
+Base.isnothing(t::AbstractToken) = t.cat==T_EOL && t.len==0%UInt64
 =#
 
 
 #das stimmt so nicht!
-#Base.sizeof(t::AbstractToken) = usize(t)%Int
+#Base.sizeof(t::AbstractToken) = t.len%Int
 
 
 
@@ -570,4 +628,5 @@ function Base.getproperty(a::AbstractToken, s::Symbol)
         return Core.getproperty(a, s)
     end
 end
+
 

@@ -156,7 +156,7 @@ end
 
 
 function Base.match(r::Matcher, s::BToken, start::Int) 
-    @boundscheck checkrange(s,start,last)
+    @boundscheck checkbounds(s,start:last)
     match(r,start-1+offset(s),usize(s),s.buffer)
     r.found > 0 && (r.found -= offset(s))
     return r
@@ -248,7 +248,7 @@ end
 """
 function Base.match(matcher::ExactMatcher,ofs::UInt32,size::UInt64, s::String)
     n = ncodeunits(matcher.pattern)
-    @boundscheck checklimit(ofs+size,s)
+    @boundscheck checkulimit(ofs+size,s)
     m = size%Int
     matcher.found = 0 # assign default value "not found"
     if n<=1
@@ -339,7 +339,7 @@ end
 
 
 function Base.match(matcher::AnyByteMatcher,s::String, sfirst::Int, slast::Int)
-    @boundscheck checkrange(s,sfirst,slast)
+    @boundscheck checkbounds(s,sfirst:slast)
     @inbounds begin
         while sfirst <= slast
             test = ismatch[codeunit(s,sfirst)]
@@ -422,7 +422,7 @@ AnyStringMatcher(pattern::AbstractVector{T} ) where T <: AbstractString = AnyStr
 
 #=
 function match(matcher::AnyStringMatcher,s::String, sfirst::Int, slast::Int )
-    @boundscheck checkrange(s,sfirst,slast)
+    @boundscheck checkbounds(s,sfirst:slast)
     @inbounds begin
         while sfirst <= slast
             test = ismatch[codeunit(s,sfirst)]

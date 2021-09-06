@@ -4,7 +4,7 @@ using MurmurHash3
 #using BitFlags
 
 include("checks.jl")
-export checkrange,checklimit
+export checkrange,checkulimit
 
 include("nibble.jl")
 export Nibble, nibble
@@ -12,6 +12,22 @@ export Nibble, nibble
 include("abstracttoken.jl")
 export AbstractToken, usize, category
 export offset, isdirect, subtoken
+export T_END
+export T_INT
+export T_REAL
+export T_CHAR
+export T_TEXT
+export T_IDENT
+export T_SPECIAL
+export T_QUOTE
+export T_OP
+export T_COMMENT
+export T_EXT
+export T_KEY
+export T_SYM
+export T_CMD
+export T_REC
+export T_LIST
 
 
 # all TCategory values and its string macros are exported by abstracttoken.jl

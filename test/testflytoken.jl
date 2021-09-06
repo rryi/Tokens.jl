@@ -2,6 +2,7 @@ using Tokens
 using Test
 
 function testflytoken()
+    
     t1 = T_TEXT"hello world"
     @test_throws BoundsError codeunit(t1,0)
     @test_throws BoundsError codeunit(t1,12)

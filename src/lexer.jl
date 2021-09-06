@@ -37,7 +37,7 @@ end
 
 "peek byte at offset from current read position"
 function byte(bl::ByteLexer, ofs::UInt32) 
-    #@boundscheck checklimit(lb.io.readofs+ofs,bl.io.writeofs)
+    #@boundscheck checkulimit(lb.io.readofs+ofs,bl.io.writeofs)
     ensure_readable(bl.io,ofs+1)
     @inbounds byte(bl.io.buffer,bl.io.readofs+ofs)
 end
@@ -166,12 +166,12 @@ Add c1 and all bytes in binary pattern 0b10xxxxxxxx to accepted follow bytes of 
 
 """
 function addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bool = true)
-    @boundscheck checklimit(category,26)
+    @boundscheck checkulimit(category,26)
     bitflag = 32<<category
     elt = eltype(first)
     etw = eltype(follow)
     if elt != elw
-        error("first and follow must have same element type, but do not: eltype(first)=$elt , eltype(follow)=$elw")
+        error("first and follow must have same element type, but: eltype(first)=$elt , eltype(follow)=$elw")
     end
     if elt==UInt8
         for b in first
@@ -195,7 +195,7 @@ function addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bo
             if closure
                 union!(sfollow,utfContinue)
             else
-                for i in 2:usize(s)
+                for i in 2:s.len
                     push!(sfollow,codeunit(s,i))
                 end
             end
@@ -206,7 +206,7 @@ function addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bo
             if closure
                 union!(sfollow,utfContinue)
             else
-                for i in 2:usize(s)
+                for i in 2:s.len
                     push!(sfollow,codeunit(s,i))
                 end
             end
@@ -217,6 +217,188 @@ function addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bo
     end
     return nothing
 end
+
+"""
+Each subtype is associated with a certain lexer action, which completes the raw
+token returned by [`next`](@ref) to a final token.
+
+The action is performed by [`token`](@ref) with a subtype instance as parameter.
+
+Many actions require additional data, which are given with an instance of the
+action type.
+"""
+abstract type LexerAction end
+
+
+"Simplest lexer action: just convert raw token to a BToken."
+struct SimpleLA <: LexerAction end
+
+"""
+Complete and unescape a quoted string. Do not change token category.
+
+This is a sequence of bytes enclosed in 'quote' bytes. Typical cases are single
+and double quote ASCII characters, as assumed in [`T_CHAR`](@ref) and [`T_QUOTE`](@ref) 
+default categories. But there are more cases, e.g. XML entities which are enclosed in '&'
+and ';'
+
+Precondition of QuoteLA is, that neither *endquote* nor *escape* are contained in raw token.
+Lets call *bf* the byte following the raw token.
+
+Collect raw token without beginning quote.
+
+* Case *bf* == *escape*
+
+Read 1 byte, continue reading and collecting bytes until a byte is not 
+allowed as following byte in raw token category. Continue with repeating the cases
+
+* Case *bf* == *endquote*
+
+return collection as token
+
+* Case anything else including end-of-data
+
+Throw a ParseError: we have a byte not allowed in this category of quoted string,
+or we reached end-of-data.
+
+"""
+struct QuoteLA <: LexerAction 
+    endquote :: UInt8
+    escape :: UInt8
+end
+
+
+# TODO replace by a more efficient implementation later on.
+const DTokenDict{T} = Base.Dict{DToken,T}
+
+function DTokenDict{DToken}(cat::Nibble, iterator)
+    ret = DTokenDict{DToken}()
+    for s in v
+        if s isa Pair
+            key = DToken(cat,s.first)
+            val = DToken(cat,s.second)
+        else
+            key = DToken(cat,s)
+            val = key
+        end
+        push!(ret,Pair{DToken,DToken}(t,t))
+    end
+    return ret
+end
+
+
+"convert to T with a default category, if T is a token type, but V not"
+function tconvert(category::Nibble,value::V, ::Type{T}) where V where T
+    t = T(value)
+    if T <: AbstractToken && !(V<:AbstractToken)
+        t = T(category,t)
+    end
+    return t
+end
+
+
+"""
+    insertSorted(keys::AbstractVector{T}, values::AbstractVector{V}, iterator, unique::Bool, category::Nibble)
+
+add all elements of iterator to keys/values. If T/V is a token type and iterator does not deliver tokens,
+category is passed to T/V constructors. 
+
+If iterator returns a Pair p, (T(p.first), V(p.second) is added. 
+If iterator returns another type, (p,p) isadded.
+elements to add are transformed to type T.
+The tuple to add is inserted such that keys is sorted, if keys was already sorted
+(a binary search is performed to determine the insertion index)
+
+"""
+function insertSorted(keys::AbstractVector{T}, values::AbstractVector{V}, iterator, unique::Bool, category::Nibble) where T where V
+    local k :: T
+    local v :: V
+    for e in iterator
+        if e isa Pair
+            k = tconvert(category,e.first,T)
+            v = tconvert(category,e.second,V)
+        else
+            k = tconvert(category,e,T)
+            k = tconvert(category,e,V)
+        end
+        r = Base.Sort.searchsorted(keys,k)
+        i = first(r) # insertion position
+        if unique && i >= last(r)
+            error("not unique: $k already found in $keys")
+        end
+        insert!(keys,i,k)
+        insert!(values,i,v)
+    end
+end
+
+
+"""
+Test identifier for a registered keyword match.
+
+raw token is typically of category [`T_IDENT`](@ref).
+
+Convert raw token to a token t of type T and raw category.
+lookup t in the *keys* list and return *values* entry of the same index on a hit,
+otherwise return t.
+
+"""
+struct KeyLA{V<:AbstractVector} <: LexerAction 
+    keys :: V # raw token to match (category ignored)
+    values :: V # token to return on a match
+    function KeyLA{V}(category::Nibble,keyIterator) where V
+        eltype(V) <: AbstractToken || error("AbstractVector{T<:AbstractToken} required, got $V")
+        keys = V()
+        values = V()
+        insertSorted(keys,values,keyIterator,true,category)
+        return new(keys,values)
+    end
+end
+
+
+
+
+"""
+Test special characters for a registered symbol match.
+
+raw token is typically of category [`T_SPECIAL`](@ref).
+
+Convert raw token to a token t of type T and raw category.
+look for an entry in keys which is equal to the beginning of T
+if found, return the longest match found, otherwise t.
+
+
+
+Do never change keys or values after construction.
+"""
+struct SymLA{V<:AbstractVector} <: LexerAction 
+    keys :: V # raw token to match (category ignored)
+    values :: V # token to return on a match
+    function SymLA{V}(category::Nibble,keyIterator) where V
+        eltype(V) <: AbstractToken || error("AbstractVector{T<:AbstractToken} required, got $V")
+        keys = V()
+        values = V()
+        insertSorted(keys,values,keyIterator,true,category)
+        return new(keys,values)
+    end
+end
+
+
+"""
+Like KeyLA, but convert to uppercase before test.
+
+In constructor, you MUST specify uppercase strings as keys to get any match.
+"""
+struct UppercaseKeyLA{V<:AbstractVector} <: LexerAction 
+    keys :: Dict{UInt64,UInt64}
+    keyCategory:: Nibble
+    function UppercaseKeyLA{V}(category::Nibble,keyIterator) where V
+        eltype(V) <: AbstractToken || error("AbstractVector{T<:AbstractToken} required, got $V")
+        keys = V()
+        values = V()
+        insertSorted(keys,values,keyIterator,true,category)
+        return new(keys,values)
+    end
+end
+
 
 """
     closequote(bl::ByteLexer) :: HToken

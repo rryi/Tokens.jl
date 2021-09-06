@@ -10,6 +10,14 @@ Why 31 bits and not 32?
  * encoding is "dense", no redundancy
  * category+length in FlyToken have exactly 31 bits
 
+Properties defined:
+
+ * .nibble: lowest 4 bits as a Nibble
+
+ * .all: whole value as UInt32
+
+ * .len: Bits 4..30  as UInt32
+
 """
 primitive type Packed31 32 end
 
@@ -30,15 +38,31 @@ function bits0_3(v)
 end
 bits0_3(v::Packed31) = bits0_3(UInt32(v))
 
-nibble(v::Packed31) = bits0_3(v)
+nibble(v::Packed31) = Nibble(bits0_3(v))
 
 "right shift by a nibble (4 bits)"
 bits4_30(v::Packed31) = UInt32(v) >> 4
 
 function Packed31(bits0_3::UInt8, bits4_30::UInt32)
-    @boundscheck checklimit(bits0_3,15) 
-    @boundscheck checklimit(bits4_30,(1<<27)-1) 
+    @boundscheck checkulimit(bits0_3,15) 
+    @boundscheck checkulimit(bits4_30,(1<<27)-1) 
     Packed31((bits4_30<<4) + bits0_3)
+end
+
+
+
+
+
+function Base.getproperty(p::Packed31, s::Symbol)
+    if s === :nibble
+        return Nibble(bits0_3(p))
+    elseif s === :all
+        return UInt32(p)
+    elseif s === :len
+        return bits4_30(p)%UInt64
+    else
+        return Core.getproperty(p, s)
+    end
 end
 
 

@@ -11,7 +11,7 @@ It is defined as an explicit type to allow for clear method signatures.
 primitive type Nibble <: Unsigned 8 end
 
 function Nibble(v::Integer) ::Nibble
-    @boundscheck checklimit(v,0x0F)
+    @boundscheck checkulimit(v,0x0F)
     reinterpret(Nibble,v%UInt8)
 end
 

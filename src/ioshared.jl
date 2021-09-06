@@ -134,7 +134,7 @@ IOShared(s::SubString{String}) = IOShared(UInt32(s.offset),s.ncodeunits%UInt64,s
 
 IOShared(s::String) = IOShared(zero(UInt32),usize(s),s)
 
-IOShared(t::BToken) = IOShared(offset(t.tiny),usize(t.tiny),t.buffer)
+IOShared(t::BToken) = IOShared(t.offset,t.len,t.buffer)
 
 IOShared(t::AbstractString) = IOShared(BToken(t))
 
@@ -401,7 +401,7 @@ function _resize(io::IOShared, ofs::UInt32, resize::Int)
         for v in io.registered
             for i in 1:length(v)
                 t = v[i]
-                s = usize(t)
+                s = t.len
                 if !isdirect(t) && s>0 
                     # we have a heap based content, test for need to relocate it
                     o = offset(t)
@@ -484,7 +484,7 @@ function _realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
     oldLimit = io.limit
     for v in io.registered
         for t in v
-            s = usize(t)
+            s = t.len
             o = offset(t)
             if !isdirect(t) 
                 if o<oldLimit
@@ -525,7 +525,7 @@ function _realloc!(io::IOShared, ofs::UInt32, resize::Int) ::UInt32
         for v in io.registered
             for i in 1:length(v)
                 t = v[i]
-                if !isdirect(t) && usize(t)>0
+                if !isdirect(t) && t.len>0
                     o = offset(t)
                     if o >= keptHeapOffset
                         v[i] = t+keptHeapDelta
@@ -582,7 +582,7 @@ function shrink!(io::IOShared, reserve::UInt32, unshare::Bool = true)
             oldLimit = io.limit
             for v in io.registered
                 for t in v
-                    s = usize(t)
+                    s = t.len
                     o = offset(t)
                     if !isdirect(t) 
                         if o<oldLimit
@@ -672,7 +672,7 @@ end
 function ensure_writeable(io::IOShared, count::UInt32)
     if io.shared>io.writeofs || io.writeofs+count>io.limit
         _realloc(io,io.writeofs,count%Int)
-        io.writeofs -= count # wi just ensured space for writing. write operation will change offset
+        io.writeofs -= count # we only ensured space for writing. write operation will change offset
     end
     return nothing
 end
@@ -965,7 +965,7 @@ and reallocates if shared portions have to be changed.
 """
 function Base.read(io::IOShared, ::Type{Token{T}}) where T
     p = read(io,Packed31)
-    size = usize(t)
+    size = t.len
     ensure_readable(io,size)
     if T <: HToken && size <= MAX_DIRECT_SIZE
         return HToken(read(io,p,DirectFly))
@@ -1257,16 +1257,5 @@ function Base.empty!(io::IOShared)
     end
     return io
 end
-
-
-#=
-# TODO unsystematic: here we test an absolute offsets, not relative to io.readofs
-# either make it internal by "_" prefix, or test relative
-"test if an offset range lies within readable data"
-function checkrange(offset::UInt32, size::UInt64, io::IOShared)
-    checklimit(offset+size,io.writeofs)
-    checklimit(io.readofs,offset)
-end
-=#
 
 

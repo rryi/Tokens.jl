@@ -5,17 +5,18 @@ Central token type: a flyweight token plus its buffer
 struct Token{F<:FlyToken} <: AbstractToken
     fly :: F # category, size, offset, possibly content
     buffer :: String # memory with token text data or EMPTYSTRING
-    Base.@propagate_inbounds function Token{F}(fly::F, buffer::String) where F<:FlyToken
-        @boundscheck isdirect(fly) || checklimit(offset(fly)+usize(fly),usize(buffer))
-        new(fly,buffer)
+    Base.@propagate_inbounds function Token{F}(f::F, buffer::String) where F<:FlyToken
+        @boundscheck isdirect(f) || checkulimit(f.ofs+f.len,usize(buffer))
+        new(f,buffer)
     end
 end
 
 
 ## GenericToken constructors
 
-Base.@propagate_inbounds function Token(fly::F, buffer::String) where F<:FlyToken
-    Token{F}(fly,buffer)
+# is NOT redundant because here is Token not type-qualified
+Base.@propagate_inbounds function Token(f::F, buffer::String) where F<:FlyToken
+    Token{F}(f,buffer)
 end
 
 
@@ -58,7 +59,7 @@ end
 
 
 function Base.show(io::IO,t::Token{T}) where T 
-    print(io, T <: HybridFly ? 'H' : 'B',Char(category(t)))
+    print(io, T <: HybridFly ? 'H' : 'B',Char(t.cat))
     Base.print_quoted(io, t)
 end
 
@@ -80,7 +81,7 @@ BToken(t::HToken) = isdirect(t) ? BToken(df(t.fly)) : BToken(bf(t.fly),t.buffer)
 
 Token{F}(cat::Nibble, s::String) where F<:FlyToken = @inbounds Token{F}(cat,0%UInt32,usize(s),s)
 Token{F}(cat::Nibble) where F<:FlyToken = @inbounds Token{F}(cat,EMPTYSTRING)
-Token{F}(t::AbstractToken) where F<:FlyToken = Token{F}(category(t),0%UInt32,usize(t),substring(t))
+Token{F}(t::AbstractToken) where F<:FlyToken = Token{F}(t.cat,0%UInt32,t.len,substring(t))
 
 
 Base.@propagate_inbounds function Token{BufferFly}(cat::Nibble,offset::UInt32, size::UInt64, s::String)
@@ -104,8 +105,8 @@ Token{T}(cat::Nibble,s::AbstractString)  where T =
 
 
 Base.@propagate_inbounds function BToken(offset::UInt32, size::UInt64,t::Union{Token,DirectFly}) 
-    @boundscheck checklimit(offset+size,usize(t))
-    @inbounds isdirect(t) ? BToken(category(t),offset,size,string(t)) : BToken(category(t),offset+offset(t),size,t.buffer)
+    @boundscheck checkulimit(offset+size,t.len)
+    @inbounds isdirect(t) ? BToken(t.cat,offset,size,string(t)) : BToken(t.cat,offset+offset(t),size,t.buffer)
 end
 
 
@@ -122,14 +123,12 @@ Token{F}(v::AbstractString) where F<:FlyToken= Token{F}(T_TEXT,v)
 # was soll das? Token{F}(offset::UInt32, size::UInt64,s::String) = where F<:FlyToken Token{F}(T_TEXT,s)
 
 
-DirectFly(t::Token{T}) where T = isdirect(t) ? df(t.fly) : DirectFly(category(t),offset(t),usize(t),t.buffer)
+DirectFly(t::Token{T}) where T = isdirect(t) ? df(t.fly) : DirectFly(t.cat,offset(t),t.len,t.buffer)
 
 
 
 ## special values for missing and nothing
 
-Base.ismissing(t::Token) = df(t.fly & ~NOTDIRECT_BIT) == DIRECT_MISSING
-Base.isnothing(t::Token) = df(t.fly & ~NOTDIRECT_BIT) == DIRECT_NOTHING
 HToken(::Nothing) = HToken(DIRECT_NOTHING)
 BToken(::Nothing) = BToken(BufferFly(nothing))
 HToken(::Missing) = HToken(DIRECT_MISSING)
@@ -160,11 +159,11 @@ ByteString is a family of types which support the following API:
 const ByteString = Union{String,SubString{String},BToken,Vector{UInt8},Vector{Int8}}
 
 
-usize(s::Union{Vector{UInt8},Vector{Int8}}) = length(s)
+usize(s::Union{Vector{UInt8},Vector{Int8}}) = length(s)%UInt64
 
 "codeunit with offset (aka 0-based index)"
 Base.@propagate_inbounds function byte(s::ByteString, ofs::UInt32)
-    @boundscheck checkbyteofs(ofs,usize(s))
+    @boundscheck checkbyteofs(ofs,s)
     b = GC.@preserve s unsafe_load(pointer(s)+ofs)
     return b
 end
@@ -173,8 +172,8 @@ Base.@propagate_inbounds function byte(s::HToken, ofs::UInt32)
     if isdirect(s) 
         return byte(s.fly,ofs)
     end
-    @boundscheck checkbyteofs(ofs,usize(s))
-    @inbounds byte(s.buffer,ofs+offset(s))
+    @boundscheck checkbyteofs(ofs,s)
+    @inbounds byte(s.buffer,ofs+s.ofs)
 end
 
 
@@ -193,7 +192,7 @@ Base.cmp(a::HToken, b::HToken) = reinterpret(Int64,u64(a.fly)|u64(b.fly))>=0 ? c
 
 Base.@propagate_inbounds function substring(offset::UInt32, size::UInt64, t::Token{F}) where F
     isdirect(t) && return substring(offset,size,df(t.fly))
-    @boundscheck checklimit(offset+size,usize(t)) # necessary to ensure substring is in bounds of s, not only of s.string
+    @boundscheck checkulimit(offset+size,t.len) # necessary to ensure substring is in bounds of s, not only of s.string
     @inbounds return substring(offset+t.offset,size,t.buffer)
 end
 
@@ -204,7 +203,7 @@ Base.convert(::Type{Token{F}}, s::AbstractString) where F <:FlyToken = Token{F}(
 
 Base.convert(::Type{Token{F}}, t::AbstractToken) where F <:FlyToken = Token{F}(t)
 
-Base.convert(::Type{SubString{String}}, t::BToken) = @inbounds SubString(offset(t),usize(t),t.buffer)
+Base.convert(::Type{SubString{String}}, t::BToken) = @inbounds SubString(offset(t),t.len,t.buffer)
 
 Base.convert(::Type{SubString{String}}, t::HToken) = convert(SubString{String},BToken(t)) 
 
@@ -240,7 +239,7 @@ end
 #=
 function Base.iterate(t::Token, i::Integer=firstindex(t))
     i > ncodeunits(t) && return nothing
-    @boundscheck checklimiti <= 0 && @boundscheck checkbounds(t, i) # ?? wozu??
+    @boundscheck checkulimiti <= 0 && @boundscheck checkbounds(t, i) # ?? wozu??
     o = offset(t)
     if isdirect(t)
         y = iterate(df(t.fly),i)

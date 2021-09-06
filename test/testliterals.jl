@@ -25,18 +25,22 @@ function testliterals()
         b2alias = b2
         b2equal = B2"direct."
         b3=  B3"longer Sampletoken äöü"
-        b3equal = B3"longer Sampletoken äöü"
+        b3identical = B3"longer Sampletoken äöü"
+        s3a = "longer "
+        s3b = "Sampletoken äöü"
+        b3equal =BToken(Nibble(3),s3a*s3b)
         @test b1==b2
         @test b1!==b2
         @test b1==d2
         @test b1!=b3
         @test b2alias === b2
         @test b2alias == b2
-        @test b2equal !== b2
+        @test b2equal === b2 # because string buffer is identical (julia reuses string literal from b2 in b2equal)
         @test b2equal == b2
         @test b1 !== b2
         @test b3 == b3equal
-        @test b3 !== b3equal
+        @test b3 === b3identical
+        @test b3 === b3equal # is === - surprisingly. seems compiler does conctant propagation s3a*s3b and looks for some interned identical string.
         @test b3[24] == 'ü'
         
         h1 = H1"direct."

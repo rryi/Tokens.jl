@@ -15,7 +15,7 @@ function locate end
 locate(what::Union{AbstractString,AbstractChar},ofs::UInt32, size::UInt64, buffer::String) = locate(BToken(what), ofs, size, where)
 
 function locate(what::UInt8, ofs::UInt32, size::UInt64, buffer::String)
-    @boundscheck checklimit(ofs+size,usize(buffer))
+    @boundscheck checkulimit(ofs+size,usize(buffer))
     p = pointer(buffer)
     q = GC.@preserve buffer ccall(:memchr, Ptr{UInt8}, (Ptr{UInt8}, Int32, Csize_t), p+ofs, b, size%Csize_t)
     return q == C_NULL ? typemax(UInt32) : UInt32(q-p)
@@ -29,7 +29,7 @@ bloomhash(b::UInt8) = UInt64(1) << (b & 0x3f)
 const BLOOMFILTERLIMIT = 48
 
 function locate(what::BToken, ofs::UInt32, size::UInt64, buffer::String)
-    @boundscheck checklimit(ofs+size,usize(buffer))
+    @boundscheck checkulimit(ofs+size,usize(buffer))
     sw = usize(what)
     size<sw && return typemax(UInt32)
     if sw<=2
@@ -155,7 +155,7 @@ end
 
 # TEST pair performance ohne C code (danach löschen)
 function locate2(what::BToken, ofs::UInt32, size::UInt64, buffer::String)
-    @boundscheck checklimit(ofs+size,usize(buffer))
+    @boundscheck checkulimit(ofs+size,usize(buffer))
     sw = usize(what)
     size<sw && return typemax(UInt32)
     if sw==2

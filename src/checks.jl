@@ -1,40 +1,38 @@
 ## parameter tchecks, error structures
 
 
-@noinline function checkrange(value::Int64, min::Int64, max::Int64)
-    (min <= value <= max) || error("RangeError: required was $min <= $value <= $max")
+#@noinline 
+function checkrange(value::Int64, min::Int64, max::Int64)
+    (min <= value <= max) || throw(BoundsError(min:max),value)
     nothing
 end
 
-@noinline function checklimit(value::UInt64,max::UInt64) 
-    value <= max || error("RangeError: required was $value <= $max")
+#@noinline 
+function checkulimit(value::UInt64,max::UInt64) 
+    value <= max || throw(BoundsError(0:max,value))
 end
 
 checkrange(value::Integer,min::Integer,max::Integer) = checkrange(Int64(value),Int64(min),Int64(max))
 
-checklimit(value::Unsigned,limit::Unsigned) = checklimit(value%UInt64,limit%UInt64) 
+checkulimit(value::Unsigned,limit::Unsigned) = checkulimit(value%UInt64,limit%UInt64) 
 
 "verify value nonnegative and <= limit"
-checklimit(value::Integer,limit::Integer) = checkrange(value,0,limit) 
-
-"deprecated - replace by checklimit"
-ckecksize(size::Integer, limit::Integer) = checklimit(size,limit)
+checkulimit(value::Integer,limit::Integer) = checkrange(value,0,limit) 
 
 
-ckeckbyteofs(ofs::UInt32, size::Unsigned) = ofs<size || error("OffsetError: required was $ofs < $size")
+
+ckeckbyteofs(ofs::UInt32, t) = ofs<usize(t) || throw(BoundsError(t,ofs))
 
 
 #Base.@propagate_inbounds function checksize(size::Unsigned, maxsize)
 
 
 "test if index range is valid for given string "
-function checkrange(s::AbstractString,first::Integer, last::Integer)
-    checkrange(first,1,last)
-    checkbounds(s,last)
-end 
+checkrange(s::AbstractString,first::Integer, last::Integer) = checkbounds(s,first:last)
 
 
-"test if offset+size range is valid for given string "
-function checkrange(offset::UInt32, size::UInt64, s::AbstractString)
-    checksize(offset+size,usize(s))
+
+"test if offset/size range is valid for given s, defaults to offset+size<=usize(d)"
+function checkrange(offset::UInt32, size::UInt64, s)
+    checkbounds(s,offset+size)
 end
