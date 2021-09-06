@@ -12,35 +12,20 @@ export Nibble, nibble
 include("abstracttoken.jl")
 export AbstractToken, usize, category
 export offset, isdirect, subtoken
-export T_END
-export T_INT
-export T_REAL
-export T_CHAR
-export T_TEXT
-export T_IDENT
-export T_SPECIAL
-export T_QUOTE
-export T_OP
-export T_COMMENT
-export T_EXT
-export T_KEY
-export T_SYM
-export T_CMD
-export T_REC
-export T_LIST
-
-
-# all TCategory values and its string macros are exported by abstracttoken.jl
+#export T_END ... category constants are exported in tokenconstants.jl
 
 include("substring.jl")
 export substring, sswrite
 
 include("packed31.jl")
-
+export Packed31
 
 include("flytoken.jl")
 export FlyToken, DirectFly, BufferFly, HybridFly
 export DToken, DIRECT_NOTHING, DIRECT_MISSING
+
+include("tokenconstants.jl")
+export CATEGORYNAMES
 
 
 include("token.jl")

@@ -49,6 +49,11 @@ function Packed31(bits0_3::UInt8, bits4_30::UInt32)
     Packed31((bits4_30<<4) + bits0_3)
 end
 
+function Packed31(bits0_3::Nibble, bits4_30::UInt32)
+    @boundscheck checkulimit(bits4_30,(1<<27)-1) 
+    Packed31((bits4_30<<4) + UInt8(bits0_3))
+end
+
 
 
 
@@ -59,7 +64,7 @@ function Base.getproperty(p::Packed31, s::Symbol)
     elseif s === :all
         return UInt32(p)
     elseif s === :len
-        return bits4_30(p)%UInt64
+        return bits4_30(p)%UInt32
     else
         return Core.getproperty(p, s)
     end

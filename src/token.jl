@@ -41,7 +41,8 @@ const HToken = Token{HybridFly}
 
 
 # Generation of the string literal macros for tokens
-
+# moved to tokenconstants
+#=
 # try export in eval             #:(:export, Symbol('@',$($(ttype)),$($(ccat)),"_str"))
 
 for ttype in ['D','H','B']
@@ -56,7 +57,7 @@ for ttype in ['D','H','B']
         @eval export $s
     end
 end
-
+=#
 
 function Base.show(io::IO,t::Token{T}) where T 
     print(io, T <: HybridFly ? 'H' : 'B',Char(t.cat))

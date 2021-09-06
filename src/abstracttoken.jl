@@ -152,34 +152,17 @@ Current category of given token. A value in 0:15.
 Meaning depends on context.
 
 """
-function category(t::AbstractToken)
+function category(t::AbstractToken)::Nibble
     throw(MethodError(category, (t,)))
 end
 
 
 # Token category default definitions
 # use is optional, except in Token constructors
-# 
-# categories are ordered by groups
-
-#=
-const T_END = Nibble(0)
-const T_INT = Nibble(1)
-const T_REAL = Nibble(2)
-const T_CHAR = Nibble(3)
-const T_TEXT = Nibble(4)
-const T_IDENT= Nibble(5)
-const T_SPECIAL = Nibble(6)
-const T_QUOTE = Nibble(7)
-const T_OP = Nibble(8)
-const T_COMMENT = Nibble(9)
-const T_EXT = Nibble(10)
-const T_KEY = Nibble(11)
-const T_SYM = Nibble(12)
-const T_CMD = Nibble(13)
-const T_REC = Nibble(14)
-const T_LIST = Nibble(15)
-=#
+# categories are ordered by groups.
+# category constants start with "T_".
+# Names in in Tokens which begin with "T_"
+# must be a category constant
 
 ## Category group 1: used in Token constructors and parsers
 

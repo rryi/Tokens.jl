@@ -5,10 +5,8 @@ version = "0.1.0"
 
 [deps]
 MurmurHash3 = "b10b62ed-fbae-5ea5-b934-abaf0477b71d"
-NamedTupleTools = "d9ec5142-1e00-5aa0-9d6a-321866360f50"
 Profile = "9abbd945-dff8-562f-b5e8-e1ebf5ef1b79"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
-TypedTables = "9d95f2ec-7b3d-5a63-8d20-e2491e220bb9"
 
 [compat]
 julia = "1"

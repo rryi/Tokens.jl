@@ -656,7 +656,7 @@ end
 
 #=
 
-
+endianness
 Base.lastindex(s::FlyToken) = Int(s.size_content & 0xf)
 Base.iterate(s::FlyToken, i::Integer) = iterate(String(s), i)
 Base.iterate(s::FlyToken) = iterate(String(s))

@@ -23,8 +23,9 @@ usize(s::Union{String,SubString{String}}) = ncodeunits(s)%UInt64
 
 
 "SubString construction using offset and size in bytes, with check of UTF8 content validity. "
-Base.@propagate_inbounds function Base.SubString{String}(ofs::UInt32, size::UInt64,s::String)
-    @boundscheck checksize(ofs+size,ncodeunits(s))
+Base.@propagate_inbounds function Base.SubString(ofs::UInt32, size::UInt64,s::String)
+#Base.@propagate_inbounds function Base.SubString{String}(ofs::UInt32, size::UInt64,s::String)
+    @boundscheck checkulimit(ofs+size,ncodeunits(s)%UInt64)
     return @inbounds SubString(s,ofs+1,thisind(s,(ofs+size)%Int))
 end
 
