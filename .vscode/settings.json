@@ -1,3 +1,4 @@
 {
-    "julia.environmentPath": "c:\\Users\\RR\\julia\\Tokens"
+    "julia.environmentPath": "c:\\Users\\RR\\julia\\Tokens",
+    "editor.bracketPairColorization.enabled": true
 }
