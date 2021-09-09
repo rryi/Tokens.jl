@@ -67,7 +67,7 @@ source code it is characterized by chapter comments
 # implementations in this module
 
 This module supplies a very memory efficient implementation
-for very short tokens with [`DirectFly`](@ref), a
+for very short tokens with [`DToken`](@ref), a
 short string plus category in 8 bytes. It can act as a
 substitute for short String instances, avoiding any allocation and
 indirect (pointer) access. Data locality is improved, gaining further speed
@@ -86,7 +86,7 @@ of a couple of bytes. For tokens in the sense of "atoms of text", a size in
 the range of a couple of bytes is expected. Text written by humans, like
 source code and published books, has sizes up to some MByte.
 
-[`HToken`](@ref) is a combination of DirectFly and BToken in
+[`HToken`](@ref) is a combination of DToken and BToken in
 one type, using no buffer for code unit counts below 8.
 
 # related types and APIs in this module
@@ -169,24 +169,30 @@ end
 """
 # T_END = 0
 
-A token signalling some end of data. 
+A token signalling some end of some structure. 
 
-Token constructors with argument *nothing* create a token of this
-category and empty content. An empty T_END token is also returned by lexers if an attempt is made to read
+Token constructors with argument *nothing* create a token of this category 
+and empty contents. 
+
+An empty T_END token can be returned if an attempt is made to process
 beyond end of data.
 
 It may contain a string, e. g. the end of a node
 in XML, or an end-of-line sequence.
 
-In many grammars, T_END tokens have a lexical
+There are grammars, where a structure end has a lexical
 representation and could be identified by a lexer. Common examples are tokens like
 "end", ")", "}", "]", ";". But the end of a semantical sequence can also be 
 defined by context data, like indentation level, or operator precedence rules,
-which have no lexical characterization. In such cases, T_END tokens are inserted 
-by the parser.
+which have no lexical characterization. In such cases, the parser could generate T_END 
+tokens.
 
-In a  [`TokenTree`](@ref), for each token which can have children, there must be a 
-T_END Token to close the sequence of its children.
+In many grammars, whitespace always terminates a token, and is allowed between tokens.
+Usually, lexers will skip whitespace. If you need a lexer which returns whitespace
+as a token, consider using T_END tokens for it.
+
+In a  [`TokenTree`](@ref), empty T_END tokens are used internally to terminate a list of children.
+For this reason, empty T_END tokens are not allowed in a TokenTree as a node.
 """
 const T_END = Nibble(0)
 
@@ -194,7 +200,9 @@ const T_END = Nibble(0)
 """
 # T_INT = 1
 
-A sequence of digits. Lexers can allow a leading sign, like '+' or '-'.
+An integer value with decimal encoding. Details depend on the lexer: it could be restricted to
+a sequence of digits, or allow a leading sign, like '+' or '-', and even group separators
+like ',' in English locales.
 
 Token constructors with an Integer argument create a token of category 
 T_INT and its decimal string representation as content.
@@ -208,7 +216,7 @@ const T_INT = Nibble(1)
 An optionally signed number with a decimal separator and/or decimal exponent.
 
 Token constructors with a Real argument create a token of category 
-T_REAL and its Utf8 string representation as content.
+T_REAL and its default string representation as content.
 """
 const T_REAL = Nibble(2)
 
@@ -235,6 +243,8 @@ Example: text entities in XML.
 
 A token constructor with a single AbstractString argument (which is no token)
 creates a token of category T_TEXT.
+
+
 """
 const T_TEXT = Nibble(4)
 
@@ -260,19 +270,27 @@ const T_IDENT= Nibble(5)
 """
 ## T_SPECIAL = 6
 
-A sequence of special characters, which is not used as delimiter of
-another lexical construct like quotes, and not recognized as symbol.
+A sequence of special characters, which has no syntactical meaning to the
+lexer. Special characters which identify another lexical construct are
+not reported as T_SPECIAL. Examples are characters , like quotes,
+or are recognized as operator or symbol
+, and not recognized as symbol
+or operator token.
+
 Lexers decide to report each special character as its own token, or
 report a contiguous sequence of special characters as one token.
 
 Token constructors with argument *missing* create a T_SPECIAL token
 with empty content.
+
+
 """
 const T_SPECIAL = Nibble(6)
 
 
 
 ## Category group 2: used in lexers 
+
 
 """
 ## T_QUOTE = 7
@@ -291,6 +309,9 @@ but may need post processing. See [`QuoteLA`](@ref) for an example.
 const T_QUOTE = Nibble(7)
 
 
+
+
+
 """
 ## T_OP = 8
 
@@ -300,10 +321,13 @@ lexical continuations to a complete token. The name OP was chosen to associate w
 
  * number scenario: a sign is immediately followed by a digit sequence.
 
- * operator scenario: sign and optionally further special characters define an operator Symbol
+ * operator scenario: sign and optionally further special characters define an operator Symbol, e.g. '+='
 
  * option scenario: a sign followed by an identifier, giving a set or unset option.
 
+It depends on the concrete use case, if a lexer uses T_OP internally, and changes the category
+in dependency of the following characters
+A lexer can either 
 A generic lexer will return a single character token of category T_OP, and the parser will
 read the next token to identify the scenario. 
 
@@ -311,7 +335,7 @@ Alternatively, a lexer could return the char sequence of one of the given scenar
 the parser will test the length and check for the other scenarios if length is 1. 
 See [`OpLA`](@ref) for an implementation.
 
-
+T_OP is the first category of tokens which can have children in a TokenTree.  
 """
 const T_OP = Nibble(8)
 
@@ -324,7 +348,9 @@ comment. Typically contains the pure comment text, without delimiters.
 Delimiters may be accessible via lexer context. Many computer languages support
 different comment flavours like inline, rest of line or multiline comments.
 
-Only simple cases like rest of line comments, end-of-line 
+Comments can be used to implement extensions to some base language. 
+They are ignored by the base language parser, but parsed in a later stage.
+For this reason, a comment token is allowed to have children in a TokenTree. 
 """
 const T_COMMENT = Nibble(9)
 
@@ -334,7 +360,8 @@ const T_COMMENT = Nibble(9)
 
 Extension category.
 
-No predefined syntax or semantic, always application-specific.
+No predefined syntax or semantic, define it application-specific. Can have children in 
+a TokenTree.
 """
 const T_EXT = Nibble(10)
 
@@ -352,9 +379,9 @@ Lexers may support different nonations for a keyword, and return a unique
 'canonical' representation,
 e. g. converting SQL keywords to uppercase. If all T_KEY strings have a
 canonical representation with less than 8 code units, your application could
-restrict T_KEY tokens to type DirectFly. Even if the grammar has longer keywords,
-you can define a short form fitting into a DirectFly as canonical representation,
-to enable use of DirectFly in the following processing steps.
+restrict T_KEY tokens to type DToken. Even if the grammar has longer keywords,
+you can define a short form fitting into a DToken as canonical representation,
+to enable use of DToken in the following processing steps.
 
 Reserved words in programming languages are usually tokenized as T_KEY.
 In a TokenTree, they can have children, e. g. condition and action for
@@ -371,8 +398,8 @@ symbol, e.g. "*", ">>>" or "+=". A lexer may accept different notations for the
 same symbol, e. g. "<>", "!=" and "≠" for inequality,
 and may return a normalized notation.
 
-Symbols usually fit into a DirectFly. Consider to grant this in your
-application (and use DirectFly for symbols).
+Symbols usually fit into a DToken. Consider to grant this in your
+application (and use DToken for symbols).
 
 In TokenTree, symbols can have children, to reflect the use of symbols
 as operators in common computer languages.
@@ -390,7 +417,7 @@ const T_SYM = Nibble(12)
 """
 ## T_CMD = 13
 
-embedded comamnds and processing instructions. 
+embedded commands and processing instructions. 
 
 In a TokenTree, it may have children which represent 
 the parsed content of the instruction.
@@ -554,6 +581,20 @@ returns the category of a token as a Nibble
 function category end
 
 
+## pseudo properties
+
+function Base.getproperty(a::AbstractToken, s::Symbol)
+    if s === :ofs
+        return offset(a)
+    elseif s === :len
+        return usize(a)
+    elseif s === :cat
+        return category(a)
+    else
+        return Core.getproperty(a, s)
+    end
+end
+
 
 
 ## AbstractString API implementations which need no specialization
@@ -561,21 +602,6 @@ function category end
 Base.codeunit(t::AbstractToken) = UInt8
 
 Base.ncodeunits(t::AbstractToken) = t.len%Int
-
-#= too dangerous ... 
-## special values for missing and nothing
-
-"AbstractToken uses category T_SYMBOL with usize 0 as encoding for missing"
-Base.ismissing(t::AbstractToken) = t.cat==T_SPECIAL && t.len==0%UInt64
-
-"AbstractToken uses category T_SPECIAL with usize 0 as encoding for nothing"
-Base.isnothing(t::AbstractToken) = t.cat==T_EOL && t.len==0%UInt64
-=#
-
-
-#das stimmt so nicht!
-#Base.sizeof(t::AbstractToken) = t.len%Int
-
 
 
 # simplified implementation, assuming t is valid UTF8.
@@ -593,23 +619,5 @@ end
 =#
 
 
-
-## helpers ##
-
-
-## pseudo properties
-
-
-function Base.getproperty(a::AbstractToken, s::Symbol)
-    if s === :ofs
-        return offset(a)
-    elseif s === :len
-        return usize(a)
-    elseif s === :cat
-        return category(a)
-    else
-        return Core.getproperty(a, s)
-    end
-end
 
 

@@ -29,7 +29,7 @@ idx[n+k+1] is 0, marking the end if the list of children
 """
 struct ITree{I<:Integer, NodeType} <: Tree{NodeType}
     idx ::Vector{I}
-    base :: AbstractVector{NodeType}
+    base :: Vector{NodeType}
 end
 
 
@@ -39,7 +39,7 @@ A tree variant of TokenVector.
 A TokenTree is a TokenVector organized as a tree.
 In contrast to  but it offers an additional tree API.
 
-A tree node is identified by an index in the token array.
+A tree node is identified by an index into the token array.
 Depending on its category, it is a leaf node (category <= T_END),
  or it has a (probably empty) subtree (category > T_END): its children are
 the following nodes in the token array, until termination by a T_END token.

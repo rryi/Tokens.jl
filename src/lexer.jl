@@ -72,7 +72,7 @@ function next(bl::ByteLexer) :: Nibble
         b0 = byte(bl.io.buffer,bl.io.readofs)
         syn0 = bl.syn[b0+1]
         category = syn0&0x1F # 5 bits
-        synbit = 32<<category # bit in syn für Folgebytes
+        synbit = 32<<category # bit mask in syn for followup bytes
         while ((endofs+=1)<=bl.io.writeofs) && (bl.syn[byte(bl.io.buffer,endofs)+1]&synbit > 0)
         end
         bl.io.readofs = endofs
@@ -106,7 +106,7 @@ bl.syn[*b*+1] contains a bitfield defining which byte categories byte *b* belong
 
 Bits 0..4: byte category, values 0..26. Values 0..15 are raw token categories
 returned by [`next`](@ref). Values>15 are raw tokens which are skipped.
-Typical use: while space, comment ending with end-of-line
+Typical use: white space, comment ending with end-of-line
 
 Bits 5..31: bit i+5 is set iff *b* is accepted as a following byte in byte category i
 

@@ -1,15 +1,21 @@
-using Documenter, Tokens
+using Tokens
+using Documenter
+
+DocMeta.setdocmeta!(Tokens, :DocTestSetup, :(using Tokens); recursive=true)
 
 makedocs(;
     modules=[Tokens],
-    format=Documenter.HTML(),
+    authors="Robert Rudolph",
+    repo="https://github.com/rryi/Tokens.jl/blob/{commit}{path}#{line}",
+    sitename="Tokens.jl",
+    format=Documenter.HTML(;
+        prettyurls=get(ENV, "CI", "false") == "true",
+        canonical="https://rryi.github.io/Tokens.jl",
+        assets=String[],
+    ),
     pages=[
         "Home" => "index.md",
     ],
-    repo="https://github.com/rryi/Tokens.jl/blob/{commit}{path}#L{line}",
-    sitename="Tokens.jl",
-    authors="Robert Rudolph",
-    assets=String[],
 )
 
 deploydocs(;

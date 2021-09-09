@@ -19,15 +19,34 @@ Inspirations came from Nicholas Ormrod's talk on [strange details of std::string
 [ShortStrings](https://github.com/xiaodaigh/ShortStrings.jl) for interned strings, and 
 [WeakRefStrings](https://github.com/JuliaData/WeakRefStrings.jl) for string arrays using a shared content buffer.
 
+# Current State
+
+Tokens.jl compiles and runs defined tests. However test coverage is very incomplete, features are not mature, expect breaking changes in upcoming releases below release 1.0.
+
 # Basic structures
 
 ## AbstractToken <: AbstractString
-A string with additionally attached token category. See token interface chapter.
+A string with an attached token category. There are 16 categories with predefined meaning, closely related to the lexer methods in the Tokens package.
 
-## FlyToken <: AbstractToken
-A token flyweight, of only 8 bytes. It consists of a token category (a value between 0 and 15), string length in code units, and either an offset into a content buffer or directly stored code units for up to 7 code units.
+## DToken, BToken, HToken <: AbstractToken
+The type central to this package comes in three flavours, identified with a prefix character.
 
-## Token <: AbstractToken
-A FlyToken plus a content buffer reference as a struct. The variant BToken uses always the content buffer, even for strings with less than 8 code units.
+B in BToken stands for "buffered". Token contents is stored in a separate string buffer, a BToken instance holds a reference to it. memory layout and behavior is very similar to a SubString. An instance consists of 16 bytes (w/o buffer).
+
+D in DToken stands for "direct": token contents is directly encoded within the instance, no separate buffer for contents is used. Instance conststs of 8 bytes. Contents size is limited to 7 code units. Compared to BToken, it saves memory, has increases data locality, and many operations are mich faster, e.g. comparisons.
+
+H in HToken stands for "hybrid". HToken combines DToken and BToken in one type, similar to a julia union type. An instance consists of 16 bytes. On runtime, it is cast to a DToken or BToken instance. In scenarios where the percentage of short tokens, wich fit into a DToken, is high, it saves memory and has better overall performance. 
+
+## SharedIO <: IO
+An IOBuffer derivate with elaborated token support. It uses a "copy on write" approach, keeping track of its parts which are
+referenced by tokens and token vectors.
+
+
+## TokenVector <: AbstractVector
+Memory-efficient Vector implementation which uses one SharedIO for all of its token elements. Within the structure, each token consumes 8 bytes plus contents bytes if contents size exceeds 7 code units.
+
+## TokenTree
+A compact tree structure on top of a TokenVector. , intended as syntax treewenn suited to for tokens stored in 
+
 
 # AbstractToken interface
