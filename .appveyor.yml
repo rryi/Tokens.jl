@@ -1,13 +1,14 @@
 # Documentation: https://github.com/JuliaCI/Appveyor.jl
 environment:
   matrix:
-    - julia_version: 1
-    - julia_version: 1.6
+    - julia_version: stable
     - julia_version: nightly
 platform:
   - x64
-cache:
-  - '%USERPROFILE%\.julia\artifacts'
+
+# cache entry from PkjTemplates produces warning: path not found
+#cache:
+#  - '%USERPROFILE%\.julia\artifacts'
 matrix:
   allow_failures:
     - julia_version: nightly
