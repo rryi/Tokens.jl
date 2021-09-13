@@ -241,14 +241,11 @@ If s isa AbstractToken, its category is preserved,
 for any other type of s, a category derived from the type of s is used,
 e. g. T_INT for integers or T_TEXT for strings.
     
-put stores content in a way not interfering with any 
-read and write access sequence on heap: content of heap does not change.
-A sequence *a=read(io..) put(io ..) b=read(io..)* will give equal values
-for a and b as *a=read(io..) b=read(io..)*
-
+put stores contents in a way not interfering with any read and write access on heap. 
 The IOShared parameter is named heap to indicate how it works: put uses a "heap area" 
 in the internal buffer at the physical end of the buffer, growing towards
-lower adresses. heap area is share-protected and not available for read and write access.
+lower adresses. heap area is share-protected, not available for read and write access,
+and preserved on a buffer reallocation. 
 
 If s has its content already in heap (s is a token or substring using heap-s buffer) 
 or returned token is direct, heap is not changed.
@@ -260,7 +257,7 @@ in this case. Default is false, change it with compressOnPut(heap,true)
 """
 put(heap::IOShared, s, ::Type{Token{F}}) where F = put(heap,Token{F}(s))
 
-function put(heap::IOShared, t::Type{Token{F}}) where F
+function put(heap::IOShared, t::Token{F}) where F
     size = usize32(t)
     if !isdirect(t) && size>0 && t.buffer !== heap.buffer
         if F <: HybridFly && size<=MAX_DIRECT_SIZE
@@ -1062,7 +1059,7 @@ end
 
 "write all available bytes (no waiting for async streams)"
 function Base.write(to::IOShared, from::IO)
-    # would work, but allocates intermediate Vecior #  = write(to,read(from))
+    # would work, but allocates intermediate Vector #  = write(to,read(from))
     b = to.buffer
     size = UInt32(bytesavailable(from))
     ensure_writeable(to,size)

@@ -40,25 +40,6 @@ BToken.
 const HToken = Token{HybridFly}
 
 
-# Generation of the string literal macros for tokens
-# moved to tokenconstants
-#=
-# try export in eval             #:(:export, Symbol('@',$($(ttype)),$($(ccat)),"_str"))
-
-for ttype in ['D','H','B']
-    for cat in 0:15
-        ccat = Char(cat<=9 ? '0'+cat : 'A'+cat-10)
-        eval(quote
-            macro $(Symbol(ttype,ccat,"_str"))(txt)
-                :($(Symbol($(ttype),"Token"))(Nibble($($cat)),$txt))
-            end
-        end)
-        s = Symbol('@',ttype,ccat,"_str")
-        @eval export $s
-    end
-end
-=#
-
 function Base.show(io::IO,t::Token{T}) where T 
     print(io, T <: HybridFly ? 'H' : 'B',Char(t.cat))
     Base.print_quoted(io, t)
@@ -170,12 +151,11 @@ Base.@propagate_inbounds function byte(s::ByteString, ofs::UInt32)
 end
 
 Base.@propagate_inbounds function byte(s::HToken, ofs::UInt32)
-    if isdirect(s) 
-        return byte(s.fly,ofs)
-    end
+    isdirect(s) && return byte(s.fly,ofs)
     @boundscheck checkbyteofs(ofs,s)
     @inbounds byte(s.buffer,ofs+s.ofs)
 end
+
 
 
 ## Base methods for tokens ##

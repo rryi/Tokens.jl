@@ -11,8 +11,7 @@ cache:
   directories:
     - ~/.julia/artifacts
 julia:
-  - 1
-  - 1.6
+  - 1.6.2
   - nightly
 jobs:
   fast_finish: true
