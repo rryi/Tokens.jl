@@ -5,6 +5,8 @@ Basic building blocks for parsers using Token and IOShared types.
 
 =#
 
+#import Base.BitSet
+
 """
 An Iterator for tokens from a stream.
 
@@ -21,7 +23,7 @@ abstract type AbstractLexer end
 ByteLexer is thought to work on byte streams with mostly ASCII based
 source text in mind. Limited Utf8 support is included.
 
-See [`next`](@ref) for its central function and 
+See [`raw`](@ref) for its central function and 
 [addcategory`](@ref) for setting up an instance. Constructor creates a
 lexer with mostly empty syntax: only category 0 is defined, all bytes belong to it,
 no follower allowed. Add character categories with *addcategory*
@@ -30,6 +32,37 @@ struct ByteLexer <: AbstractLexer
     io :: IOShared # lexer sets mark always to the begin of the current token.
     syn:: Vector{UInt32} # structure defining byte and byte sequence categories for next(..) 
     function ByteLexer(io :: IOShared)
+        new(io,Vector{UInt32}(zero(UInt32),256))
+    end
+end
+
+"""
+ByteLexer0 is ByteLexer with zero-terminated contents, allowing faster lexer operations.
+
+ByteLexer0 has the following requirements:
+
+1. ByteLexer0.io must be 0-terminated. If the last code unit in io is not already 0, 0 is added in the constructor.
+
+2. ByteLexer0.io must not have an attachaded data source. Checked in constructor.
+
+3. Appends to ByteLexer0.io after constructing ByteLexer0 are not allowed.
+
+3. A code unit of value 0 within contents is not allowed - it will be treated as end-of-data. 
+
+4. ByteLexer0.syn must not contain code unit 0 as continuation code unit, for all raw categories. 
+This is a critical property which is NOT checked.
+
+These restrictions allow to optimize [`raw`](@ref) code:  tests on valid offsets are omitted,
+sparing a comparison plus conditional branch on every byte read from io.
+"""
+struct ByteLexer0 <: AbstractLexer
+    io :: IOShared # lexer sets mark always to the begin of the current token.
+    syn:: Vector{UInt32} # structure defining byte and byte sequence categories for next(..) 
+    function ByteLexer(io :: IOShared)
+        if io.io !== nothing
+            error("ByteLexer0 needs an IOshared without attached data source/sink")
+        end
+        write(io,0%UInt8)
         new(io,Vector{UInt32}(zero(UInt32),256))
     end
 end
@@ -45,7 +78,7 @@ end
 
 
 """
-    next(bl::ByteLexer) :: Nibble
+    raw(bl::ByteLexer) :: UInt8
 
 reads a sequence of bytes which form a raw token,
 and returns a raw token category according to bl.syn.
@@ -53,21 +86,24 @@ The bytes read are not returned as token, they are
 defined by the mark position (begin of byte sequence) and 
 the read position (end of byte sequence) of bl.io.
 
+raw returns a token category. Category T_END with 
+empty contents signals end-of-data.
+
 Next step is processing a regular token from the raw token,
 typical methods are [`token`](@ref), [`key`](@ref),
 [`sym`](@ref), [`unquote`](@ref), [`unescape`](@ref)
 
-next supports IOShared with data source attached. However, for
+raw supports IOShared with data source attached. However, for
 efficiency, fillup of bl.io-s internal buffer is made only once,
 requesting bl.io.preferredLimit/2 bytes. Set preferredLimit large
 enough to cover all valid token sizes.
 """
-function next(bl::ByteLexer) :: Nibble 
+function raw(bl::ByteLexer) :: Nibble 
     fillup(bl.io,bl.io.preferredlimit>>>1) # once and here to guarantee stable offsets
     while true
         # parse a raw token and its (lexer) category 
         endofs = mark(bl.io)
-        bl.io.writeofs==endofs && return Nibble(0) # EOD
+        bl.io.writeofs==endofs && return Nibble(0) # end of data!
         # we have at least 1 byte readable ==> defines category to return
         b0 = byte(bl.io.buffer,bl.io.readofs)
         syn0 = bl.syn[b0+1]
@@ -83,22 +119,50 @@ end
 
 
 """
-    addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bool = true)
+    raw(bl::ByteLexer0) :: UInt8
+
+fast but probably unsafe raw variant.
+
+Relies on the properties described for ByteLexer0 for proper operation.
+"""
+function raw(bl::ByteLexer0) :: Nibble 
+    while true
+        # parse a raw token and its (lexer) category 
+        endofs = mark(bl.io)
+        # we have at least 1 byte readable ==> defines category to return
+        b0 = byte(bl.io.buffer,bl.io.readofs)
+        (b0==0) && return Nibble(0) # end of data!
+        syn0 = bl.syn[b0+1]
+        category = syn0&0x1F # 5 bits
+        synbit = 32<<category # bit mask in syn for followup bytes
+        while (bl.syn[byte(bl.io.buffer,endofs+=1)+1]&synbit > 0)
+        end
+        bl.io.readofs = endofs
+        # we have read a raw token. exit if this raw token is not to be skipped
+        category<=15 && return Nibble(category)
+    end
+end
+
+
+"""
+    addcategory(bl::AbstractLexer,category::UInt8, first, follow, closure :: Bool = true)
 
 defines/enhances the raw token category *category* in bl. 
 
 category: a value 0..26. Values 0..15 are byte categories reported in raw tokens
-by [`next`](@ref), values 16..26 are used to define byte sequences which are
-to be skipped. Typically used for white space and comments terminated by end-of-line.
+by [`raw`](@ref), values 16..26 are used to define byte sequences which are
+to be skipped. Typically used for white space and comments which are
+defined by a single starting and ending code unit.
 
 first and follow are iterators giving either UInt8 values or Char values.
 
 closure is only used for iterators which give Char values, explained below
 
-For UInt8 values, a raw token of category *category* begins with a byte found in first 
+For UInt8 values, a raw token of category *category* begins with a byte found in *first* 
 and includes all following bytes as long as they are listed in *follow*.
 
 An error is reported if a byte in first already has a category different from *category*
+and 0.
 
 The compiled vector bl.syn has the following structure:
 
@@ -113,6 +177,8 @@ Bits 5..31: bit i+5 is set iff *b* is accepted as a following byte in byte categ
 addcategory is cumulative: addcategory(category,fi1,fo1);addcategory(category,fi2,fo2) is equivalent
 to addcategory(category,push!(fi1,fi2),push!(fo1,fo2)
 
+# limited processing of multibyte characters
+
 For first and follow being Char iterators, an attempt is made to define raw token
 categories for Char iterators, with the same idea as above: next(bl) should return
 a raw token of category *category* if the 1st Char is found in *first* and all following
@@ -121,12 +187,13 @@ to achieve in more complex settings. We have the following, limited support for 
 sequences including non-ASCII characters:
 
 > if bl.io begins with a character sequence s = s1, s2, ..sn with s1 found in first and 
-> s2..sn all found in follow, next(bl) will return a raw token of category *category*
-> at least of the length n
+> s2..sn all found in follow, raw(bl) will return a raw token of category *category*
+> at least of the length of the character sequence s1,...sn.
 
 If closure is true, it is further granted that the raw token will be a valid Utf8 
-string, i.e. it does not end with an incomplete Utf8 encoding. But in both cases,
-the returned raw token might be much longer than n.
+string on a valid Utf8-coded input, i.e. it does not end with an incomplete Utf8 encoding. 
+But in both cases, the returned raw token might be much longer than the character sequence
+s1,...,sn.
 
 Even more critical: 
 
@@ -138,29 +205,29 @@ add all characters d encoded by code units d1,...dm to the category if d1==c1,
 and  will allow d as a following character if for each b in d1..dm there 
 exists a character e containing b as a code unit.
 
-To understand how it works, lets look at a character c encoded in n Utf8 
+To understand how it works, lets look at a character *c* encoded in n Utf8 
 code units *c1*, *c2*, ..., *cn*. 
 
-# Processing if closure==false
+# Processing if closure===false
 
-## c in sfirst:
+## *c* in sfirst:
 
 Error if c1 has already a category in bl different from 0 and *category*.
 Add c1 to accepted first byte of category.
 Add c2,c3,...,cn to accepted follow bytes of category.
 
-## c in sfollow:
+## *c* in sfollow:
 Add c1,c2,...,cn to accepted follow bytes of category.
 
-# Processing if closure==true
+# Processing if closure===true
 
-## c in sfirst:
+## *c* in sfirst:
 
 Error if c1 has already a category in bl different from 0 and *category*.
 Add c1 to accepted first byte of category.
 Add all bytes in binary pattern 0b10xxxxxxxx to accepted follow bytes of category.
 
-## c in sfollow:
+## *c* in sfollow:
 Add c1 and all bytes in binary pattern 0b10xxxxxxxx to accepted follow bytes of category.
 
 
@@ -186,9 +253,9 @@ function addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bo
             bl.syn[b+1] |= bitflag
         end
     elseif elt==Char
-        utfContinue = Bitset(128:128+63) # all byte codes permitted in Utf8 as following byte
-        sfirst = Bitset()  
-        sfollow = Bitset()
+        utfContinue = BitSet(128:128+63) # all byte codes permitted in Utf8 as following byte
+        sfirst = BitSet()  
+        sfollow = BitSet()
         for c in first
             s = DToken(c)
             push!(sfirst,codeunit(s,1))
@@ -218,20 +285,57 @@ function addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bo
     return nothing
 end
 
+
 """
-Each subtype is associated with a certain lexer action, which completes the raw
-token returned by [`next`](@ref) to a final token.
+Type and parameters for [`token`](@ref) lexer actions. 
+    
+A LexerAction subtype identifies a lexical rule by its name, and may contain
+parameters for that rule. Rule implementation is given as a method for token
+with the LexerAction subtype as parameter.
 
-The action is performed by [`token`](@ref) with a subtype instance as parameter.
-
-Many actions require additional data, which are given with an instance of the
-action type.
 """
 abstract type LexerAction end
 
 
-"Simplest lexer action: just convert raw token to a BToken."
+"""
+token(l::AbstractLexer, la::LexerAction) :: Token
+
+token tries to read a sequence of bytes from *l* which conforms to
+the lexical rule given by *la*. On success, a valid token is returned.
+
+On failure, nothing is read from *l* and an empty token of
+category T_END is returned.
+
+A token method may have special preconditions, they have to be described
+in the method comment. A typical precondition is, that [`raw`](@ref) 
+was called directly before, and returned a category which fits for *la*. 
+
+A token method shoud be type stable. This implies, that it returns
+always the same token type, on success and failure.
+
+This default implementation here throws a method error, indicating
+that a concrete method implementation is missing.
+"""
+function token(l::AbstractLexer, la::LexerAction)
+    throw(MethodError(token, (l,la)))
+end
+
+
+"""
+Simplest lexer action: just convert raw token to a BToken.
+
+Requires a preceding *raw* call.
+"""
 struct SimpleLA <: LexerAction end
+
+function token(l::AbstractLexer, la::SimpleLA)
+    b0 = byte(bl.io.buffer,bl.io.readofs)
+    (b0==0) && return Nibble(0) # end of data!
+    syn0 = bl.syn[b0+1]    c = 
+    throw(MethodError(token, (l,la)))
+end
+
+
 
 """
 Complete and unescape a quoted string. Do not change token category.
