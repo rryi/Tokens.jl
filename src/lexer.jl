@@ -37,30 +37,47 @@ struct ByteLexer <: AbstractLexer
 end
 
 """
-ByteLexer0 is ByteLexer with zero-terminated contents, allowing faster lexer operations.
+UnsafeLexer is ByteLexer with zero-terminated contents, allowing faster lexer operations.
 
-ByteLexer0 has the following requirements:
+UnsafeLexer has quite a lot of restrictions. If they are violated, a machine crash
+is possible.
 
-1. ByteLexer0.io must be 0-terminated. If the last code unit in io is not already 0, 0 is added in the constructor.
+1. UnsafeLexer.io must be 0-terminated. Constructor appends 0 to its io. If io is
+shared beyond its current end, this will cause an expensive reorganization. Its
+cost can even overcompensate the gains in subsequent lexer operations.
 
-2. ByteLexer0.io must not have an attachaded data source. Checked in constructor.
+2. UnsafeLexer.io must not have an attachaded data source. Checked in constructor.
 
-3. Appends to ByteLexer0.io after constructing ByteLexer0 are not allowed.
+3. Appends to UnsafeLexer.io after constructing UnsafeLexer are not allowed. Not checked.
+Reason: all lexer reads will stop when they find a 0 byte, which is regarded as end marker
+of data.
 
-3. A code unit of value 0 within contents is not allowed - it will be treated as end-of-data. 
+4. Reading from UnsafeLexer.io (except lexer operations) is not allowed. Reason: normal
+read operations on io might consume the terminating 0 byte, subsequent lexer operations
+will return invalid results or even crash the machine.
 
-4. ByteLexer0.syn must not contain code unit 0 as continuation code unit, for all raw categories. 
-This is a critical property which is NOT checked.
+5. All lexical rules must exclude byte 0 as valid contents. If a lexical rule consumes the
+terminating 0 byte, subsequent calls of raw will read beyond the end of defined data,
+returning invalid raw tokens or even crash the machine with a segfault.
+
+6. UnsafeLexer.syn must not contain code unit 0 as continuation code unit, for all raw categories. 
+This is a critical property which is checked by [`addcategory`](@ref)
+
+7. In UnsafeLexer.syn, for all categories except T_END, the 1st byte (establishing the category)
+must also be allowed as continuation byte for its category. 
+
+8. In UnsafeLexer.syn, byte vale 0 has category T_END, and There is no continuation byte 
+in category T_END.
 
 These restrictions allow to optimize [`raw`](@ref) code:  tests on valid offsets are omitted,
 sparing a comparison plus conditional branch on every byte read from io.
 """
-struct ByteLexer0 <: AbstractLexer
+struct UnsafeLexer <: AbstractLexer
     io :: IOShared # lexer sets mark always to the begin of the current token.
     syn:: Vector{UInt32} # structure defining byte and byte sequence categories for next(..) 
     function ByteLexer(io :: IOShared)
         if io.io !== nothing
-            error("ByteLexer0 needs an IOshared without attached data source/sink")
+            error("UnsafeLexer needs an IOshared without attached data source/sink")
         end
         write(io,0%UInt8)
         new(io,Vector{UInt32}(zero(UInt32),256))
@@ -86,12 +103,18 @@ The bytes read are not returned as token, they are
 defined by the mark position (begin of byte sequence) and 
 the read position (end of byte sequence) of bl.io.
 
-raw returns a token category. Category T_END with 
-empty contents signals end-of-data.
+raw returns a raw token category, according to bl.syn.
+If end of data is reached, raw returns T_END.
 
-Next step is processing a regular token from the raw token,
-typical methods are [`token`](@ref), [`key`](@ref),
-[`sym`](@ref), [`unquote`](@ref), [`unescape`](@ref)
+Otherwise, fthe first byte to read defines the raw
+category. Fr every byte value, exactly one raw category is 
+defined in bl.syn, which is returned. The first byte is 
+always read. All following bytes are read, as long as
+bl.syn allows them as continuation byte for the raw category.
+
+Purpose of raw: identify a ggd candidate for the next token.
+The next step in lexical analysis will take the result from raw 
+and build a token. See [`token`](@ref) and its concrete methods.
 
 raw supports IOShared with data source attached. However, for
 efficiency, fillup of bl.io-s internal buffer is made only once,
@@ -119,13 +142,13 @@ end
 
 
 """
-    raw(bl::ByteLexer0) :: UInt8
+    raw(bl::UnsafeLexer) :: UInt8
 
 fast but probably unsafe raw variant.
 
-Relies on the properties described for ByteLexer0 for proper operation.
+Relies on the properties described for UnsafeLexer for proper operation.
 """
-function raw(bl::ByteLexer0) :: Nibble 
+function raw(bl::UnsafeLexer) :: Nibble 
     while true
         # parse a raw token and its (lexer) category 
         endofs = mark(bl.io)
@@ -135,7 +158,8 @@ function raw(bl::ByteLexer0) :: Nibble
         syn0 = bl.syn[b0+1]
         category = syn0&0x1F # 5 bits
         synbit = 32<<category # bit mask in syn for followup bytes
-        while (bl.syn[byte(bl.io.buffer,endofs+=1)+1]&synbit > 0)
+        while (bl.syn[byte(bl.io.buffer,endofs)+1]&synbit > 0)
+            endofs += 1
         end
         bl.io.readofs = endofs
         # we have read a raw token. exit if this raw token is not to be skipped
