@@ -137,6 +137,7 @@ ByteString is a family of types which support the following API:
  * usize(t) -> number of bytes as UInt64
 
  * byte(t,ofs::UInt32) -> UInt8 value at offset ofs
+
 """
 const ByteString = Union{String,SubString{String},BToken,Vector{UInt8},Vector{Int8}}
 

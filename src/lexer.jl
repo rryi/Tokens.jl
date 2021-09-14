@@ -61,12 +61,12 @@ terminating 0 byte, subsequent calls of raw will read beyond the end of defined 
 returning invalid raw tokens or even crash the machine with a segfault.
 
 6. UnsafeLexer.syn must not contain code unit 0 as continuation code unit, for all raw categories. 
-This is a critical property which is checked by [`addcategory`](@ref)
+This is a critical property which is checked by [`addcategory`](@ref).
 
 7. In UnsafeLexer.syn, for all categories except T_END, the 1st byte (establishing the category)
 must also be allowed as continuation byte for its category. 
 
-8. In UnsafeLexer.syn, byte vale 0 has category T_END, and There is no continuation byte 
+8. In UnsafeLexer.syn, byte vale 0 has category T_END, and there is no continuation byte 
 in category T_END.
 
 These restrictions allow to optimize [`raw`](@ref) code:  tests on valid offsets are omitted,
@@ -85,13 +85,12 @@ struct UnsafeLexer <: AbstractLexer
 end
 
 
-"peek byte at offset from current read position"
-function byte(bl::ByteLexer, ofs::UInt32) 
-    #@boundscheck checkulimit(lb.io.readofs+ofs,bl.io.writeofs)
-    ensure_readable(bl.io,ofs+1)
-    @inbounds byte(bl.io.buffer,bl.io.readofs+ofs)
-end
+"""
+peek byte at offset from current read position.
 
+Offset is checked for validity
+"""
+byte(bl::AbstractLexer, ofs::UInt32) = byte(bl.io,ofs)
 
 
 """
