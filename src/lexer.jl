@@ -23,7 +23,7 @@ abstract type AbstractLexer end
 ByteLexer is thought to work on byte streams with mostly ASCII based
 source text in mind. Limited Utf8 support is included.
 
-See [`raw`](@ref) for its central function and 
+See [`rawtoken`](@ref) for its central function and 
 [addcategory`](@ref) for setting up an instance. Constructor creates a
 lexer with mostly empty syntax: only category 0 is defined, all bytes belong to it,
 no follower allowed. Add character categories with *addcategory*
@@ -57,7 +57,7 @@ read operations on io might consume the terminating 0 byte, subsequent lexer ope
 will return invalid results or even crash the machine.
 
 5. All lexical rules must exclude byte 0 as valid contents. If a lexical rule consumes the
-terminating 0 byte, subsequent calls of raw will read beyond the end of defined data,
+terminating 0 byte, subsequent calls of rawtoken will read beyond the end of defined data,
 returning invalid raw tokens or even crash the machine with a segfault.
 
 6. UnsafeLexer.syn must not contain code unit 0 as continuation code unit, for all raw categories. 
@@ -69,7 +69,7 @@ must also be allowed as continuation byte for its category.
 8. In UnsafeLexer.syn, byte vale 0 has category T_END, and there is no continuation byte 
 in category T_END.
 
-These restrictions allow to optimize [`raw`](@ref) code:  tests on valid offsets are omitted,
+These restrictions allow to optimize [`rawtoken`](@ref) code:  tests on valid offsets are omitted,
 sparing a comparison plus conditional branch on every byte read from io.
 """
 struct UnsafeLexer <: AbstractLexer
@@ -88,13 +88,13 @@ end
 """
 peek byte at offset from current read position.
 
-Offset is checked for validity
+Exception thrown if offset is invalid.
 """
 byte(bl::AbstractLexer, ofs::UInt32) = byte(bl.io,ofs)
 
 
 """
-    raw(bl::ByteLexer) :: UInt8
+    rawtoken(bl::ByteLexer) :: UInt8
 
 reads a sequence of bytes which form a raw token,
 and returns a raw token category according to bl.syn.
@@ -102,8 +102,8 @@ The bytes read are not returned as token, they are
 defined by the mark position (begin of byte sequence) and 
 the read position (end of byte sequence) of bl.io.
 
-raw returns a raw token category, according to bl.syn.
-If end of data is reached, raw returns T_END.
+rawtoken returns a raw token category, according to bl.syn.
+If end of data is reached, rawtoken returns T_END.
 
 Otherwise, fthe first byte to read defines the raw
 category. Fr every byte value, exactly one raw category is 
@@ -111,16 +111,16 @@ defined in bl.syn, which is returned. The first byte is
 always read. All following bytes are read, as long as
 bl.syn allows them as continuation byte for the raw category.
 
-Purpose of raw: identify a ggd candidate for the next token.
-The next step in lexical analysis will take the result from raw 
+Purpose of rawtoken: identify a good candidate for the next token.
+The next step in lexical analysis will take the result from rawtoken 
 and build a token. See [`token`](@ref) and its concrete methods.
 
-raw supports IOShared with data source attached. However, for
+rawtoken supports IOShared with data source attached. However, for
 efficiency, fillup of bl.io-s internal buffer is made only once,
 requesting bl.io.preferredLimit/2 bytes. Set preferredLimit large
 enough to cover all valid token sizes.
 """
-function raw(bl::ByteLexer) :: Nibble 
+function rawtoken(bl::ByteLexer) :: Nibble 
     fillup(bl.io,bl.io.preferredlimit>>>1) # once and here to guarantee stable offsets
     while true
         # parse a raw token and its (lexer) category 
@@ -147,7 +147,7 @@ fast but probably unsafe raw variant.
 
 Relies on the properties described for UnsafeLexer for proper operation.
 """
-function raw(bl::UnsafeLexer) :: Nibble 
+function rawtoken(bl::UnsafeLexer) :: Nibble 
     while true
         # parse a raw token and its (lexer) category 
         endofs = mark(bl.io)
@@ -173,7 +173,7 @@ end
 defines/enhances the raw token category *category* in bl. 
 
 category: a value 0..26. Values 0..15 are byte categories reported in raw tokens
-by [`raw`](@ref), values 16..26 are used to define byte sequences which are
+by [`rawtoken`](@ref), values 16..26 are used to define byte sequences which are
 to be skipped. Typically used for white space and comments which are
 defined by a single starting and ending code unit.
 
@@ -192,7 +192,7 @@ The compiled vector bl.syn has the following structure:
 bl.syn[*b*+1] contains a bitfield defining which byte categories byte *b* belongs to.
 
 Bits 0..4: byte category, values 0..26. Values 0..15 are raw token categories
-returned by [`next`](@ref). Values>15 are raw tokens which are skipped.
+returned by [`rawtoken`](@ref). Values>15 are raw tokens which are skipped.
 Typical use: white space, comment ending with end-of-line
 
 Bits 5..31: bit i+5 is set iff *b* is accepted as a following byte in byte category i
@@ -210,7 +210,7 @@ to achieve in more complex settings. We have the following, limited support for 
 sequences including non-ASCII characters:
 
 > if bl.io begins with a character sequence s = s1, s2, ..sn with s1 found in first and 
-> s2..sn all found in follow, raw(bl) will return a raw token of category *category*
+> s2..sn all found in follow, rawtoken(bl) will return a raw token of category *category*
 > at least of the length of the character sequence s1,...sn.
 
 If closure is true, it is further granted that the raw token will be a valid Utf8 
@@ -255,7 +255,7 @@ Add c1 and all bytes in binary pattern 0b10xxxxxxxx to accepted follow bytes of 
 
 
 """
-function addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bool = true)
+function addcategory(bl::AbstractLexer,category::UInt8, first, follow, closure :: Bool = true)
     @boundscheck checkulimit(category,26)
     bitflag = 32<<category
     elt = eltype(first)
@@ -305,6 +305,11 @@ function addcategory(bl::ByteLexer,category::UInt8, first, follow, closure :: Bo
     else
         error("only UInt8 and Char element types are supported, but first has eltype $elt")
     end
+    if bl <: UnsafeLexer
+        # check if all conditions are met
+        # TODO
+
+    end
     return nothing
 end
 
@@ -326,18 +331,24 @@ token(l::AbstractLexer, la::LexerAction) :: Token
 token tries to read a sequence of bytes from *l* which conforms to
 the lexical rule given by *la*. On success, a valid token is returned.
 
-On failure, nothing is read from *l* and an empty token of
-category T_END is returned.
+On failure, *l* is not changed by token and an empty token of
+category T_END is returned. 
 
 A token method may have special preconditions, they have to be described
-in the method comment. A typical precondition is, that [`raw`](@ref) 
+in the method comment. A typical precondition is, that [`rawtoken`](@ref) 
 was called directly before, and returned a category which fits for *la*. 
 
-A token method shoud be type stable. This implies, that it returns
+A token method should be type stable. This implies, that it returns
 always the same token type, on success and failure.
 
 This default implementation here throws a method error, indicating
 that a concrete method implementation is missing.
+
+A typical parser rule starts with a rawtoken call. One or more token
+method calls try to construct a valid token using rawtoken information.
+Found token is added to the syntax tree, and probably  more tokens 
+are parsed and added as children to syntax tree. On completion,
+list of child tokens is closed and parser actions are finalized.
 """
 function token(l::AbstractLexer, la::LexerAction)
     throw(MethodError(token, (l,la)))
@@ -347,7 +358,7 @@ end
 """
 Simplest lexer action: just convert raw token to a BToken.
 
-Requires a preceding *raw* call.
+Requires a preceding *rawtoken* call.
 """
 struct SimpleLA <: LexerAction end
 
