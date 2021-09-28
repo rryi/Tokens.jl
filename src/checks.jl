@@ -1,4 +1,4 @@
-## parameter tchecks, error structures
+## parameter checks, error structures and messages
 
 
 #@noinline 
@@ -36,3 +36,22 @@ checkrange(s::AbstractString,first::Integer, last::Integer) = checkbounds(s,firs
 function checkrange(offset::UInt32, size::UInt64, s)
     checkbounds(s,offset+size)
 end
+
+
+"""
+    dumpbyte(io:IO, byte::UInt8)
+
+write a byte value ascii-readable: replace control characters and nonAscii values
+by a hex notation prefixed with $. Normal $ ascii character is doubled.
+"""
+function dumpbyte(io:IO, byte::UInt8)
+    if byte<32 || byte>127 || byte==UInt8('$')
+        write(io,'$', Base.bytes2hex[1 + byte>>>4], Base.bytes2hex[1 + byte&0x0f])
+    else
+        if byte==UInt8('$')
+            write(io,byte) # double $ to distinguish from hex notation
+        end
+        write(io,byte) 
+    end
+end
+

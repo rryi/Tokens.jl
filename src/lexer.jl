@@ -7,6 +7,9 @@ Basic building blocks for parsers using Token and IOShared types.
 
 #import Base.BitSet
 
+
+## basic lexer types
+
 """
 An Iterator for tokens from a stream.
 
@@ -36,15 +39,16 @@ struct ByteLexer <: AbstractLexer
     end
 end
 
+
 """
 UnsafeLexer is ByteLexer with zero-terminated contents, allowing faster lexer operations.
 
 UnsafeLexer has quite a lot of restrictions. If they are violated, a machine crash
 is possible.
 
-1. UnsafeLexer.io must be 0-terminated. Constructor appends 0 to its io. If io is
-shared beyond its current end, this will cause an expensive reorganization. Its
-cost can even overcompensate the gains in subsequent lexer operations.
+1. UnsafeLexer.io must be 0-terminated. This is enforced by constructor which appends 
+0 to its io. If io is shared beyond its current end, this will cause an expensive 
+reorganization. Its cost can overcompensate the gains in subsequent lexer operations.
 
 2. UnsafeLexer.io must not have an attachaded data source. Checked in constructor.
 
@@ -54,23 +58,15 @@ of data.
 
 4. Reading from UnsafeLexer.io (except lexer operations) is not allowed. Reason: normal
 read operations on io might consume the terminating 0 byte, subsequent lexer operations
-will return invalid results or even crash the machine.
+will return invalid results or even crash the machine. Not checked.
 
 5. All lexical rules must exclude byte 0 as valid contents. If a lexical rule consumes the
 terminating 0 byte, subsequent calls of rawtoken will read beyond the end of defined data,
-returning invalid raw tokens or even crash the machine with a segfault.
-
-6. UnsafeLexer.syn must not contain code unit 0 as continuation code unit, for all raw categories. 
-This is a critical property which is checked by [`addcategory`](@ref).
-
-7. In UnsafeLexer.syn, for all categories except T_END, the 1st byte (establishing the category)
-must also be allowed as continuation byte for its category. 
-
-8. In UnsafeLexer.syn, byte vale 0 has category T_END, and there is no continuation byte 
-in category T_END.
+returning invalid raw tokens or even crash the machine with a segfault. For [`rawtoken`](@ref),
+it is checked within [`addcategory`](@ref). 
 
 These restrictions allow to optimize [`rawtoken`](@ref) code:  tests on valid offsets are omitted,
-sparing a comparison plus conditional branch on every byte read from io.
+sparing one comparison plus conditional branch on every byte read from io.
 """
 struct UnsafeLexer <: AbstractLexer
     io :: IOShared # lexer sets mark always to the begin of the current token.
@@ -88,81 +84,174 @@ end
 """
 peek byte at offset from current read position.
 
-Exception thrown if offset is invalid.
+Exception thrown if end of data reached.
 """
-byte(bl::AbstractLexer, ofs::UInt32) = byte(bl.io,ofs)
+byte(l::AbstractLexer, ofs::UInt32) = byte(l.io,ofs)
 
 
 """
-    rawtoken(bl::ByteLexer) :: UInt8
-
-reads a sequence of bytes which form a raw token,
-and returns a raw token category according to bl.syn.
-The bytes read are not returned as token, they are 
-defined by the mark position (begin of byte sequence) and 
-the read position (end of byte sequence) of bl.io.
-
-rawtoken returns a raw token category, according to bl.syn.
-If end of data is reached, rawtoken returns T_END.
-
-Otherwise, fthe first byte to read defines the raw
-category. Fr every byte value, exactly one raw category is 
-defined in bl.syn, which is returned. The first byte is 
-always read. All following bytes are read, as long as
-bl.syn allows them as continuation byte for the raw category.
-
-Purpose of rawtoken: identify a good candidate for the next token.
-The next step in lexical analysis will take the result from rawtoken 
-and build a token. See [`token`](@ref) and its concrete methods.
-
-rawtoken supports IOShared with data source attached. However, for
-efficiency, fillup of bl.io-s internal buffer is made only once,
-requesting bl.io.preferredLimit/2 bytes. Set preferredLimit large
-enough to cover all valid token sizes.
+peek at 1st byte
 """
-function rawtoken(bl::ByteLexer) :: Nibble 
-    fillup(bl.io,bl.io.preferredlimit>>>1) # once and here to guarantee stable offsets
-    while true
-        # parse a raw token and its (lexer) category 
-        endofs = mark(bl.io)
-        bl.io.writeofs==endofs && return Nibble(0) # end of data!
-        # we have at least 1 byte readable ==> defines category to return
-        b0 = byte(bl.io.buffer,bl.io.readofs)
-        syn0 = bl.syn[b0+1]
-        category = syn0&0x1F # 5 bits
-        synbit = 32<<category # bit mask in syn for followup bytes
-        while ((endofs+=1)<=bl.io.writeofs) && (bl.syn[byte(bl.io.buffer,endofs)+1]&synbit > 0)
-        end
-        bl.io.readofs = endofs
-        # we have read a raw token. exit if this raw token is not to be skipped
-        category<=15 && return Nibble(category)
-    end
+peek(l::AbstractLexer) = peek(l.io)
+
+
+"""
+peek at 1st byte. No offset check - returns 0 at end-of-data.
+
+This does not literally conform to the peek function contract:
+at end-of-data, it does not throw an exception, but returns 0.
+For an UnsafeLexer, this is a byte value which is not allowed in 
+contents, because it is used as end-of-data marker.
+"""
+@inline function peek(l::UnsafeLexer)
+    b = l.io.buffer
+    GC.@preserve b return unsafe_load(pointer(b)+l.io.readofs)
 end
 
 
 """
-    raw(bl::UnsafeLexer) :: UInt8
+    rawfirst(l::AbstractLexer, cat::Nibble) :: Bool
+
+return false if end-of-data reached or first 
+byte in *l* is not of category *cat*.
+
+Otherwise, consume that byte and return true-
+If true, i is read and true is returned.
+If false, it is not consumed and false is returned.
+"""
+@inline function rawfirst(l::AbstractLexer, cat::Nibble) :: Bool
+    if hasmore(l) 
+        b0 = peek(l)
+        if (bl.syn[b0+1]&0x1f) == cat
+            l.io.readofs += 1
+            return true
+        end
+    end
+    return false    
+end
+
+
+
+@inline function rawfirst(l::UnsafeLexer, cat::Nibble) :: Bool
+    b0 = peek(l)
+    if (bl.syn[b0+1]&0x1f) == cat
+        l.io.readofs += 1
+        return true
+    end
+    return false    
+end
+
+"""
+    rawcontinue(l::AbstractLexer,cat::Nibble)
+
+    consume bytes from *l* as long as they are
+    allowed as continuation bytes for category cat
+"""
+@inline function rawcontinue(ul::UnsafeLexer,cat::Nibble)
+    synbit = 32<<cat # bit mask in syn for followup bytes
+    while ul.syn[peek(ul)+1]&synbit > 0
+        ul.io.readofs += 1
+    end
+    return nothing
+end
+
+
+"""
+    rawcontinue(l::AbstractLexer,cat::Nibble)
+
+    consume bytes from l as long as they are
+    allowed as continuation bytes for category cat
+"""
+@inline function rawcontinue(l::AbstractLexer,cat::Nibble)
+    synbit = 32<<cat # bit mask in syn for followup bytes
+    while (l.io.readofs<l.io.writeofs) && ul.syn[peek(l)+1]&synbit > 0
+        ul.io.readofs += 1
+    end
+    return nothing
+end
+
+
+
+"""
+    rawtoken(bl::ByteLexer) :: Nibble
+
+implements an oversimplified (and ultrafast) lexer. 
+Its purpose is to identify a good candidate for the next token.
+The next step in lexical analysis will take the result from rawtoken 
+and build a token. See [`token`](@ref) and its concrete methods.
+
+It reads a sequence of bytes which form a raw token,
+defined by the mark position (begin of byte sequence) and 
+the read position (end of byte sequence) of bl.io.
+
+It returns a token category.
+
+If end of data is reached, rawtoken returns T_END with an empty raw token.
+Otherwise, one byte is read from bl.io. For every byte value, 
+exactly one raw category is defined in bl.syn, which is returned. 
+The first byte is always read. All following bytes are read, as long as
+bl.syn allows them as continuation byte for the raw category.
+
+rawtoken supports IOShared with data source attached. However, for
+efficiency, fillup of bl.io-s internal buffer is made only once,
+requesting bl.io.preferredLimit/2 bytes. Set preferredLimit large
+enough to cover all valid token sizes, or use an IOShared without
+attached data source, as done by [`UnsafeLexer`](@ref).
+
+*rawtoken* builds its raw token on the base of two character classes,
+leaving all alternative decisions to its caller. An illustrative
+example are quoted strings: *rawtoken* will recognize its start with '"' and read
+all bytes which are listed as valid continuation in *bl*-s syn table. This will 
+typically exclude the quote character itself, an escape code, and eventually 
+end-of-line bytes. These cases and the case end-of-data have to be treated by
+the token method.
+"""
+function rawtoken(bl::ByteLexer) :: Nibble 
+    io = bl.io
+    fillup(io,io.preferredlimit>>>1) # once and here to guarantee stable offsets
+    while (endofs=mark(io))<io.writeofs
+        # parse a raw token and its (lexer) category 
+        # we have at least 1 byte readable ==> defines category to return
+        @inbounds begin
+            b0 = byte(io.buffer,endofs)
+            syn0 = bl.syn[b0+1]
+            category = syn0&0x1F # 5 bits
+            synbit = 32<<category # bit mask in syn for followup bytes
+            while ((endofs+=1)<io.writeofs) && (bl.syn[byte(io.buffer,endofs)+1]&synbit > 0)
+            end
+        end
+        io.readofs = endofs
+        # we have read a raw token. exit if raw token is not to be skipped
+        category <= 0x0F && return Nibble(category)
+    end
+    return Nibble(0)
+end
+
+
+"""
+    rawtoken(ul::UnsafeLexer) :: UInt8
 
 fast but probably unsafe raw variant.
 
 Relies on the properties described for UnsafeLexer for proper operation.
 """
-function rawtoken(bl::UnsafeLexer) :: Nibble 
+function rawtoken(ul::UnsafeLexer) :: Nibble 
     while true
         # parse a raw token and its (lexer) category 
-        endofs = mark(bl.io)
+        endofs = mark(ul.io)
         # we have at least 1 byte readable ==> defines category to return
-        b0 = byte(bl.io.buffer,bl.io.readofs)
-        (b0==0) && return Nibble(0) # end of data!
-        syn0 = bl.syn[b0+1]
-        category = syn0&0x1F # 5 bits
-        synbit = 32<<category # bit mask in syn for followup bytes
-        while (bl.syn[byte(bl.io.buffer,endofs)+1]&synbit > 0)
-            endofs += 1
+        @inbounds begin
+            b0 = peek(ul) 
+            b0==0x00 && return Nibble(0) # end of data!
+            syn0 = ul.syn[b0+1]
+            category = syn0&0x1F # 5 bits
+            synbit = 32<<category # bit mask in syn for followup bytes
+            while ul.syn[peek(ul)+1]&synbit > 0
+                ul.io.readofs += 1
+            end
+            # we have read a raw token. exit if this raw token is not to be skipped
+            category<=0x0F && return Nibble(category)
         end
-        bl.io.readofs = endofs
-        # we have read a raw token. exit if this raw token is not to be skipped
-        category<=15 && return Nibble(category)
     end
 end
 
@@ -306,103 +395,16 @@ function addcategory(bl::AbstractLexer,category::UInt8, first, follow, closure :
         error("only UInt8 and Char element types are supported, but first has eltype $elt")
     end
     if bl <: UnsafeLexer
-        # check if all conditions are met
-        # TODO
-
+        # check if byte 0 is no continuation byte for any category
+        (bl.syn[1]>>>5) != 0 && error("byte 0 is defined as continuation code in some raw category - not permitted for UnsafeLexer")
     end
     return nothing
 end
 
 
-"""
-Type and parameters for [`token`](@ref) lexer actions. 
-    
-A LexerAction subtype identifies a lexical rule by its name, and may contain
-parameters for that rule. Rule implementation is given as a method for token
-with the LexerAction subtype as parameter.
-
-"""
-abstract type LexerAction end
-
-
-"""
-token(l::AbstractLexer, la::LexerAction) :: Token
-
-token tries to read a sequence of bytes from *l* which conforms to
-the lexical rule given by *la*. On success, a valid token is returned.
-
-On failure, *l* is not changed by token and an empty token of
-category T_END is returned. 
-
-A token method may have special preconditions, they have to be described
-in the method comment. A typical precondition is, that [`rawtoken`](@ref) 
-was called directly before, and returned a category which fits for *la*. 
-
-A token method should be type stable. This implies, that it returns
-always the same token type, on success and failure.
-
-This default implementation here throws a method error, indicating
-that a concrete method implementation is missing.
-
-A typical parser rule starts with a rawtoken call. One or more token
-method calls try to construct a valid token using rawtoken information.
-Found token is added to the syntax tree, and probably  more tokens 
-are parsed and added as children to syntax tree. On completion,
-list of child tokens is closed and parser actions are finalized.
-"""
-function token(l::AbstractLexer, la::LexerAction)
-    throw(MethodError(token, (l,la)))
-end
-
-
-"""
-Simplest lexer action: just convert raw token to a BToken.
-
-Requires a preceding *rawtoken* call.
-"""
-struct SimpleLA <: LexerAction end
-
-function token(l::AbstractLexer, la::SimpleLA)
-    b0 = byte(bl.io.buffer,bl.io.readofs)
-    (b0==0) && return Nibble(0) # end of data!
-    syn0 = bl.syn[b0+1]    c = 
-    throw(MethodError(token, (l,la)))
-end
-
-
-
-"""
-Complete and unescape a quoted string. Do not change token category.
-
-This is a sequence of bytes enclosed in 'quote' bytes. Typical cases are single
-and double quote ASCII characters, as assumed in [`T_CHAR`](@ref) and [`T_QUOTE`](@ref) 
-default categories. But there are more cases, e.g. XML entities which are enclosed in '&'
-and ';'
-
-Precondition of QuoteLA is, that neither *endquote* nor *escape* are contained in raw token.
-Lets call *bf* the byte following the raw token.
-
-Collect raw token without beginning quote.
-
-* Case *bf* == *escape*
-
-Read 1 byte, continue reading and collecting bytes until a byte is not 
-allowed as following byte in raw token category. Continue with repeating the cases
-
-* Case *bf* == *endquote*
-
-return collection as token
-
-* Case anything else including end-of-data
-
-Throw a ParseError: we have a byte not allowed in this category of quoted string,
-or we reached end-of-data.
-
-"""
-struct QuoteLA <: LexerAction 
-    endquote :: UInt8
-    escape :: UInt8
-end
+## some helpers needed in lexer actions
+# are inserted here before the lexer actions
+# to keep all lexer actions in one code block
 
 
 # TODO replace by a more efficient implementation later on.
@@ -435,6 +437,14 @@ end
 
 
 """
+hasmore(l::AbstractLexer) :: Bool
+
+true if l.io has bytes to read 
+"""
+@inline hasmore(l::AbstractLexer) = l.io.readofs<l.io.writeofs # TODO test on 0 byte for UnsafeLexer?!
+
+
+"""
     insertSorted(keys::AbstractVector{T}, values::AbstractVector{V}, iterator, unique::Bool, category::Nibble)
 
 add all elements of iterator to keys/values. If T/V is a token type and iterator does not deliver tokens,
@@ -460,13 +470,325 @@ function insertSorted(keys::AbstractVector{T}, values::AbstractVector{V}, iterat
         end
         r = Base.Sort.searchsorted(keys,k)
         i = first(r) # insertion position
-        if unique && i >= last(r)
+        if unique && i>=last(r)
             error("not unique: $k already found in $keys")
         end
         insert!(keys,i,k)
         insert!(values,i,v)
     end
 end
+
+
+"""
+error msg helper function: write out bytes readable as ascii if they exist. 
+"""
+@noinline function dumpbytes(io::IOShared, source::IOShared, startofs, endofs)
+    if startofs+10 < endofs
+        # dump only begin and end
+        dumpbytes(io,source,startofs,startofs+3)
+        write(io," .. ")
+        dumpbytes(io,source,endofs-3,endofs)
+    else
+        for o in startofs:endofs-1
+            if o>=0 && o<source.writeofs
+                dumpbyte(io,byte(source,o))
+            end
+        end
+    end
+end
+
+"""
+    lexererror(l::AbstractLexer, msg::AbstractString)
+
+Throw an error exception with lexer position context.
+
+To activate line number tracking, call tracklines(l.io)
+"""
+@noinline function lexererror(l::AbstractLexer, msg::AbstractString)
+    io = l.io
+    tmp = IOShared()
+    write(tmp,typeof(l))
+    write(tmp," error at mark=")
+    write(tmp,io.mark)
+    write(tmp,", readofs=")
+    write(tmp,io.readofs)
+    line, pos = linepos(io)
+    write(tmp,", line=")
+    write(tmp,line)
+    write(tmp,", pos=")
+    write(tmp,pos)
+    if io.readofs > io.mark
+        write(tmp,", ")
+        dumpbytes(tmp,io,io.mark-3,io.mark)
+        write(tmp,'<')
+        dumpbytes(tmp,io,io.mark,io.readofs)
+        write(tmp,'>')
+        dumpbytes(tmp,io,io.readofs,io.readofs+3)
+    end
+    write(tmp, " : ")
+    write(tmp,msg)
+    error(read(tmp,SubString))
+end
+
+
+## code block of lexer actions and associated token methods
+
+"""
+Type and parameters for [`token`](@ref) lexer rules. 
+    
+A LexerAction subtype identifies a lexical rule by its name, and may contain
+parameters for that rule. Rule implementation is given as a method for token
+with the LexerAction subtype as parameter.
+
+"""
+abstract type LexerAction end
+
+
+"""
+token(l::AbstractLexer, ...) :: Token
+
+*token* tries to construct a sequence of bytes from *l* which conforms to
+the lexical rule identified by following parameters. 
+On success, a valid token is returned.
+
+If the lexical rule cannot be matched, either an error is thrown
+or an empty token of category T_END is returned. The latter is recommended
+if another token completion is 
+
+All token methods assume that a "raw token" is already defined, consisting of
+all bytes between mark position and current read position in *l.io*. 
+A token method may change mark and read position redefine reduce or extend 
+that raw token by changing read position of *l*.io. 
+
+[`rawtoken`](@ref) is the usual way to define an initial raw token, it
+implements an oversimplified (and ultrafast) lexer, leaving all 
+alternative decisions to its caller. An illustrative
+example are quoted strings: *rawtoken* will recognize its start with '"' and read
+all bytes which are listed as valid continuation in *l*-s syn table. This will 
+typically exclude the quote character itself, an escape code, and eventually 
+end-of-line bytes. These cases and the case end-of-data have to be treated by
+the token method.
+
+A parser production typically starts by calling [`rawtoken`](@ref), 
+and the parser decides which *token* method to call on behalf of the 
+token category returned by *rawtoken*. 
+If *token* did not return a valid token, another token method is tested, 
+backtracking is necessary or a syntax error has to be reported.
+On success, found token is processed, e.g. added to a syntax tree, 
+and probably  more tokens are parsed and added as children to the syntax tree. 
+On completion, list of child tokens is closed and parser actions are finalized.
+
+A token method may have special preconditions, they have to be described
+in the method comment. A typical precondition is, that [`rawtoken`](@ref) 
+was called, and returned a category which fits for *la*. 
+
+A token method should be type stable. This implies, that it returns
+always the same token type, on success and failure.
+
+This default implementation here throws a method error, indicating
+that a concrete method implementation is missing.
+
+All token methods assume that a "raw token" is already read, consisting of
+al bytes between mark position and current read position. A token method may
+reduce or extend that raw token by changing mark or read position of *l*.io. 
+"""
+function token end
+
+function token(l::AbstractLexer, la::LexerAction) :: BToken
+    throw(MethodError(token, (l,la)))
+end
+
+
+"""
+Simplest lexer action: just convert raw token to a BToken.
+
+Requires that io.mark is set to the beginning of the token, and 
+its end is defined by the current read offset. This is usually 
+initialized by a preceding  [`rawtoken`](@ref) call.
+
+Contents from marked offset until current read offset is returned
+as a  [`BToken`](@ref) with category given in RawLA instance.
+
+RawLA can be directly applied to T_INT and T_IDENT rawtoken
+categories, and probably to T_SPECIAL. However, in most cases,
+further checks and maybe adding more bytes to the raw token
+are necessary. See e.g. [`NumberLA`](@ref) for enhancing
+raw T_INT and T_OP tokens.
+
+
+RawLA is used as last step in token creation.
+"""
+struct RawLA <: LexerAction 
+    cat :: Nibble
+end
+
+function token(l::AbstractLexer, cat::Nibble) 
+    @boundscheck l.io.mark>l.io.readofs && lexererror(l,"invalid mark in lexer - no valid raw token")
+    @inbounds Token(BufferFly(cat,l.io.mark,(l.io.readofs-l.io.mark)%UInt64),l.io.buffer)
+end
+
+"""
+Number (int and real) tokens.
+
+NumberLA as defined here assumes that a raw token consisting of
+optionally a sign and a sequence of digits is already identified.
+In the default lexer definition, the precondition is fulfilled if
+[`rawtoken`](@ref) returns T_INT, or T_OP with usize >1.
+
+NumberLA checks if a decimal separator and fraction digits follow,
+and consumes them. It checks then, if an exponent separator follows,
+consumes it and consumes a (optionally signed) integer as exponent.
+
+If one of the separators is found, a T_REAL token is returned, 
+otherwise a T_INT token.
+"""
+struct NumberLA <: LexerAction 
+    decimalSeparator :: UInt8
+    exponentSeparator :: UInt8 # capitalized exponent, usually 'E'
+end
+
+function token(l::AbstractLexer, la::NumberLA) 
+    start = l.io.mark
+    cat = T_INT
+    if hasmore(l)
+        # test on decimal separator
+        maybeDecimal = peek(l.io)
+        if maybeDecimal == la.decimalSeparator
+            skip(l,1) # read separator
+            # startFraction = l.io.readofs
+            rawcontinue(l,T_INT) # scan digits - maybe none
+            cat = T_REAL
+        end
+        # test on exponent 
+        if hasmore(l)
+            maybeExponent = peek(l.io) & 0xdf # convert to capitalized value
+            if maybeExponent == la.exponentSeparator
+                skip(l,1) # read separator
+                #startFraction = l.io.readofs
+                # skip sign
+                rawfirst(l,T_OP) # consume sign if present
+                rawcontinue(l,T_INT) # scan sign plusdigits
+                cat = T_REAL
+            end
+        end
+    end
+    # no continuation to a real number found, stay at INT
+    return token(l,cat)
+end
+
+
+"""
+Complete and unescape a quoted string. Do not change token category.
+
+This is a sequence of bytes enclosed in 'quote' bytes. Typical cases are single
+and double quote ASCII characters, as assumed in [`T_CHAR`](@ref) and [`T_QUOTE`](@ref) 
+default categories. But there are more cases, e.g. XML entities which are enclosed by '&'
+and ';'. QuoteLA covers two escaping methods: either with an escape code, or by doubling
+the ending quote code, specified by *escape*==*endquote*.
+
+Precondition of QuoteLA is a raw token starting with the beginning quote byte, 
+and ending with end-of-data or a byte which is not allowed in the quoted sequence.
+The raw token category must be equal to the category of the QuoteLA instance.
+The raw token without beginning quote is added to a byte stream which collects all
+contents to be reported as final token.
+
+If further bytes exist, Lets call *bf* the byte following the raw token. 
+*bf* is read from lexer and not added to the contents collection.
+We distinguish the following cases:
+
+1. Case end-of-data
+Throw a ParseError: we have an incomplete quoted string.
+
+2. Case *bf* == *endquote* && *escape* != *endquote*
+The standard (and probably most frequent) case.
+Return collected byte stream as token.
+
+3. Case *bf* == *escape* && *escape* != *endquote*
+Read next byte and add it to token, continue reading and collecting bytes until a byte is not 
+allowed as following byte in raw token category. Continue with repeating the cases.
+
+4. Case *bf* == *escape* && *escape* == *endquote*
+If end-of-data reached, process like case 2.
+If following byte is != *endquote*, process like case 2.
+Otherwise, process like case 3
+
+5. Case anything else
+Throw a ParseError: we have a byte which is not allowed in quoted string.
+
+"""
+struct QuoteLA <: LexerAction # TODO benchmark BitStruct alternative. needs bitsizeof definition for Nibble. encode/decode work because Nibble<:Unsigned
+    category :: Nibble
+    endquote :: UInt8
+    escape :: UInt8
+end
+
+"""
+    token(l::AbstractLexer,t::AbstractToken) :: Token
+
+Return a token consisting of t, with current rawtoken contents appended.
+"""
+token(l::AbstractLexer,t::AbstractToken) = t * token(l,RawLA(T_TEXT))
+
+"""
+token(l::UnsafeLexer,t::AbstractToken)  :: Token
+
+Return a token consisting of t, with current rawtoken contents appended.
+This variant for UnsafeLexer builds the new contents within *l.io*, 
+by appending in the contents area. This is possible for Unsafelexer (only),
+because end-of-data is recognized by a byte value 0 within the contents, not
+the current write offset.
+
+Advantages:
+
+ * token resides in lexer buffer, avoiding a contents copy when adding to a
+   token vector or tree which alsi uses the lexer buffer
+
+ * multiple appends are possible without copying, if *t* is the last 
+   contents within *l.io*. Example: multiple escapes within a [`QuoteLA`](@ref)
+"""
+function token(l::UnsafeLexer,t::AbstractToken) 
+    io = l.io
+    tlen = usize32(t)
+    size =  tlen+ io.readofs-io.mark
+    # we can skip writing t to io if t-s contents is already at the end if io
+    if (t.ofs+tlen !== io.writeofs) || (t.buffer!==io.buffer)
+        write(io,t)
+    end
+    write(io,token(l,T_QUOTE))
+    return BToken(t.cat,io.writeofs-size,size%UInt64,io.buffer)
+end
+
+
+function token(l::AbstractLexer, la::QuoteLA) 
+    l.io.mark+= 1 # skip quote char
+    t = token(l,la.category) # final token or its first part
+    while hasmore(l) # process escapes 
+        bf = read(l.io, UInt8) # consume quote or escape char
+        if bf == la.endquote
+            if bf != la.escape 
+                return t
+            end
+            # we have endquote, but it could be an escaped endquote byte
+            if hasmore(l) && peek(l)!=la.endquote
+                return t
+            end
+        end
+        if next != la.escape
+            lexererror(l,"quoted string not closed - illegal byte found")
+        end
+        # process escape. - requires a new token to be allocated, because contents differs from io Data
+        mark(l) # start of token continuation, which is the escaped byte
+        rawcontinue(l,la.category)
+        t = token(l,t)
+        if l <: UnsafeLexer
+        t = t * token(l,la.category)
+        # TODO build t in lexer.io for UnsafeLexer?
+        # would be possible, because end-of-data is defined by 0 byte
+    end
+    lexererror(l,"Missing closing quote - end-of-data reached")
+
+end
+
 
 
 """
@@ -1509,7 +1831,7 @@ public class Lexer extends Token { // implements java.util.Enumeration{
 	                case LexerConst.CHAR:
 	                case LexerConst.STRING: {
 	                    char c;
-	                    this.firstEscape = 0; // flag for: no first escape - 0 is delimiter pos, so outside of token!
+	                    this.firstEscape = 0; // flag for: no first escape - 0 is delimiter pos, so outside of token
 	                    final char stringEscape = this.symbolStringEscape;
 	                    // POSTCOND of the if: pos is pos of terminating char, not found if pos>=parseEnd
 	                    if (stringEscape != 0) {

@@ -1187,21 +1187,21 @@ function Base.truncate(io::IOShared, n::Integer)
     return io
 end
 
-"peek a byte at offset (aka 0-based index)"
-Base.@propagate_inbounds function byte(s::IOShared, ofs::UInt32)
-    @boundscheck checkbyteofs(ofs,usize(s))
-    b = GC.@preserve s.buffer unsafe_load(pointer(s.buffer)+ofs)
+
+"peek a byte at offset (aka 0-based index) in data of this"
+function byte(s::IOShared, ofs::UInt32)
+    ensure_readable(s,ofs+1)
+    b = GC.@preserve s.buffer unsafe_load(pointer(s.buffer)+s.readofs+ofs)
     return b
 end
 
 
 "lookahead 1 byte"
-function Base.peek(from::IOShared)
+Base.@propagate_inbounds function Base.peek(from::IOShared)
     ensure_readable(from,1)
     b = from.buffer
-    x = 0%UInt8
     GC.@preserve b begin
-        ptr::Ptr{T} = pointer(b)+from.readofs
+        ptr = pointer(b)+from.readofs
         x = unsafe_load(ptr)
     end
     return x

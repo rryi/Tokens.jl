@@ -66,7 +66,7 @@ Token{F}(cat::Nibble) where F<:FlyToken = @inbounds Token{F}(cat,EMPTYSTRING)
 Token{F}(t::AbstractToken) where F<:FlyToken = Token{F}(t.cat,0%UInt32,t.len,substring(t))
 
 
-Base.@propagate_inbounds function Token{BufferFly}(cat::Nibble,offset::UInt32, size::UInt64, s::String)
+Base.@propagate_inbounds function BToken(cat::Nibble,offset::UInt32, size::UInt64, s::String)
     size == 0 && return BToken(cat)
     BToken(BufferFly(cat,size)+offset,s)
 end
@@ -136,7 +136,7 @@ ByteString is a family of types which support the following API:
 
  * usize(t) -> number of bytes as UInt64
 
- * byte(t,ofs::UInt32) -> UInt8 value at offset ofs
+ * byte(t,ofs::UInt32) -> UInt8 value at offset ofs of internal buffer
 
 """
 const ByteString = Union{String,SubString{String},BToken,Vector{UInt8},Vector{Int8}}
@@ -144,7 +144,7 @@ const ByteString = Union{String,SubString{String},BToken,Vector{UInt8},Vector{In
 
 usize(s::Union{Vector{UInt8},Vector{Int8}}) = length(s)%UInt64
 
-"codeunit with offset (aka 0-based index)"
+"read codeunit with offset (aka 0-based index)"
 Base.@propagate_inbounds function byte(s::ByteString, ofs::UInt32)
     @boundscheck checkbyteofs(ofs,s)
     b = GC.@preserve s unsafe_load(pointer(s)+ofs)

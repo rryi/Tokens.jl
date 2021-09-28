@@ -289,7 +289,7 @@ const T_SPECIAL = Nibble(6)
 
 
 
-## Category group 2: used in lexers 
+## Category group 2: used in lexers and parsers
 
 
 """
@@ -316,8 +316,9 @@ const T_QUOTE = Nibble(7)
 ## T_OP = 8
 
 A sequence starting with a special character like '+' and '-', which has several alternative
-lexical continuations to a complete token. The name OP was chosen to associate with
-"operator" or "option". Typical scenarios for '+' and '-':
+lexical continuations to a complete token. The name T_OP shall indicate the use as operator,
+and the different case of an option (like in command line arguments). 
+Typical scenarios for '+' and '-' are:
 
  * number scenario: a sign is immediately followed by a digit sequence.
 
@@ -325,11 +326,14 @@ lexical continuations to a complete token. The name OP was chosen to associate w
 
  * option scenario: a sign followed by an identifier, giving a set or unset option.
 
-It depends on the concrete use case, if a lexer uses T_OP internally, and changes the category
-in dependency of the following characters
-A lexer can either 
-A generic lexer will return a single character token of category T_OP, and the parser will
-read the next token to identify the scenario. 
+Recommendation: a lexer should return the char sequence of one of the given scenarios, and
+the parser will test the length and check for the other scenarios if length is 1.  
+    
+The default lexer definition tries to continue with digits, which is probably the
+most common case. If the parser context requires to consider the sign as an operator,
+and not part of a number, the parser has to break the raw token into two tokens.
+If the raw token has length 1, it implies that no number but an operator has to be parsed.
+Alternative: define no continuation bytes for T_OP.
 
 Alternatively, a lexer could return the char sequence of one of the given scenarios, and
 the parser will test the length and check for the other scenarios if length is 1. 
@@ -355,23 +359,11 @@ For this reason, a comment token is allowed to have children in a TokenTree.
 const T_COMMENT = Nibble(9)
 
 
-"""
-## T_EXT = 10
-
-Extension category.
-
-No predefined syntax or semantic, define it application-specific. Can have children in 
-a TokenTree.
-"""
-const T_EXT = Nibble(10)
-
-
-
 # group (3): higher level categories, intended for parsers and token trees
 
 
 """
-## T_KEY = 11
+## T_KEY = 10
 
 Identifier recognized as keyword. 
 
@@ -387,11 +379,11 @@ Reserved words in programming languages are usually tokenized as T_KEY.
 In a TokenTree, they can have children, e. g. condition and action for
 control structures like IF/THEN/ELSE or FUNCTION parameters and code.
 """
-const T_KEY = Nibble(11)
+const T_KEY = Nibble(10)
 
 
 """
-## T_SYM = 12
+## T_SYM = 11
 
 One or more special characters which form a semantically interpreted
 symbol, e.g. "*", ">>>" or "+=". A lexer may accept different notations for the
@@ -409,21 +401,21 @@ value, i.e. ismissing(t) returns true.
 
 
 """
-const T_SYM = Nibble(12)
+const T_SYM = Nibble(11)
 
 
 
 
 """
-## T_CMD = 13
+## T_CMD = 12
 
 embedded commands and processing instructions. 
 
 In a TokenTree, it may have children which represent 
-the parsed content of the instruction.
+the parsed contents of the instruction.
 
-A parser will typically identify a processing instruction by some unique prefix
-and suffix. In the first stage, the text between prefix and suffix may be
+A lexer will typically identify a processing instruction by some unique prefix
+and suffix. In the first parser stage, the text between prefix and suffix may be
 stored as unparsed text in a T_CMD token. When building a syntax tree,
 it might get parsed (probably with a different parser).
 
@@ -434,11 +426,11 @@ From a lexer-s view, T_CMD is structurally similar to quoted strings and comment
 a sequence of unparsed content with a delimiter sequence at its begin and end, 
 which is excluded from the returned token.
 """
-const T_CMD = Nibble(13)
+const T_CMD = Nibble(12)
 
 
 """
-## T_REC = 14
+## T_REC = 13
 
 record structure: a node in TokenTree with children.
 
@@ -451,11 +443,11 @@ A specialized lexer may "abuse" T_REC for a lexical structure, e.g. a match
 against a certain regular expression, like a date format.
 
 """
-const T_REC = Nibble(14)
+const T_REC = Nibble(13)
 
 
 """
-## T_LIST = 15
+## T_LIST = 14
 
 list: a node in TokenTree with children.
 T_LIST is recommended if children access is based on the sequence order,
@@ -464,8 +456,19 @@ like julia vectors or JSON arrays. Often, all children have the same data type.
 A specialized lexer may "abuse" T_LIST for a lexical structure, e.g. a match
 against a certain regular expression, like a date format.
 """
-const T_LIST = Nibble(15)
+const T_LIST = Nibble(14)
 
+
+
+"""
+## T_EXT = 15
+
+Extension category.
+
+No predefined syntax or semantic, define it application-specific. Can have children in 
+a TokenTree.
+"""
+const T_EXT = Nibble(15)
 
 
 
