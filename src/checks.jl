@@ -42,9 +42,9 @@ end
     dumpbyte(io:IO, byte::UInt8)
 
 write a byte value ascii-readable: replace control characters and nonAscii values
-by a hex notation prefixed with $. Normal $ ascii character is doubled.
+ a hex notation prefixed with a dollar character. a dollar in text contents is doubled
 """
-function dumpbyte(io:IO, byte::UInt8)
+function dumpbyte(io::IO, byte::UInt8)
     if byte<32 || byte>127 || byte==UInt8('$')
         write(io,'$', Base.bytes2hex[1 + byte>>>4], Base.bytes2hex[1 + byte&0x0f])
     else

@@ -1191,8 +1191,9 @@ end
 "peek a byte at offset (aka 0-based index) in data of this"
 function byte(s::IOShared, ofs::UInt32)
     ensure_readable(s,ofs+1)
-    b = GC.@preserve s.buffer unsafe_load(pointer(s.buffer)+s.readofs+ofs)
-    return b
+    b = s.buffer
+    ret = GC.@preserve b unsafe_load(pointer(b)+s.readofs+ofs)
+    return ret
 end
 
 

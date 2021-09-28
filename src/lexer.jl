@@ -780,13 +780,8 @@ function token(l::AbstractLexer, la::QuoteLA)
         mark(l) # start of token continuation, which is the escaped byte
         rawcontinue(l,la.category)
         t = token(l,t)
-        if l <: UnsafeLexer
-        t = t * token(l,la.category)
-        # TODO build t in lexer.io for UnsafeLexer?
-        # would be possible, because end-of-data is defined by 0 byte
     end
     lexererror(l,"Missing closing quote - end-of-data reached")
-
 end
 
 
