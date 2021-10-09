@@ -71,7 +71,7 @@ sparing one comparison plus conditional branch on every byte read from io.
 struct UnsafeLexer <: AbstractLexer
     io :: IOShared # lexer sets mark always to the begin of the current token.
     syn:: Vector{UInt32} # structure defining byte and byte sequence categories for next(..) 
-    function ByteLexer(io :: IOShared)
+    function UnsafeLexer(io :: IOShared)
         if io.io !== nothing
             error("UnsafeLexer needs an IOshared without attached data source/sink")
         end

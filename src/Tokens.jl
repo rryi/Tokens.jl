@@ -30,7 +30,6 @@ export CATEGORYNAMES
 
 include("token.jl")
 export Token, BToken, HToken, Token
-export @D1_str
 
 include("search.jl")
 export locate
@@ -47,6 +46,7 @@ include("tokenvector.jl")
 export TokenVector
 include("match.jl")
 export initialize!, Matcher, ExactMatcher, AnyByteMatcher, AnyStringMatcher
+export @rs_str
 
 #include("nibblevector.jl")
 

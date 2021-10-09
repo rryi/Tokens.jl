@@ -67,9 +67,13 @@ It consists of
 
  * a 'compiled' pattern structure (specific to an associated pattern matching algorithmn)
  
- * result of the last match attempt (match position, match szie, matched pattern parameters)
+ * result of the last match attempt
   
-A Matcher is not thread-safe, it should be constructed and used in one thread only.
+A Matcher is not thread-safe and not reentrant.
+It should be constructed and used in one thread only.
+If matcher construction is expensive, it should support
+the Base.copy function to create a copy with deep copies
+of all fields which are mutable.
 
 In the constructor, pattern definition is 'compiled' in a pattern structure 
 best suited for the associated pattern matching algorithm. In contrast to ordinary 
@@ -80,8 +84,6 @@ over the positions in the string to search in.
 The matching algorithm is implemented in the [`Base.match`](@ref) function, which
 returns a match result object, and has a matcher as its first parameter.
 All Matchers implemented in package Tokens return itself.
-
-
 
 All search variants like findfirst, findnext, occursin, startswith, endswith and match
 variants with several type varations on where to search are all mapped on the central
@@ -96,23 +98,21 @@ This holds for Base.AbstractString, and AbstractToken and IOShared of this modul
 
 Every concrete Matcher type must have the following properties:
 
-* a field (or property) *found*::Int which is set by a match call.
-  found==0 indicates no match. found>0 gives the position of the match as an 1-based index.
 
+* a field (or property) *matchsize*::UInt64 which is set to the number of
+  bytes matched or 0 (no match).
 
-* a field (or property) *length*::Int which is set if found>0. It gives the length
-  of the match in bytes.
+* a field (or property) *matchofs*::UInt32 which is set by a match call.
+  It is the offset of the match within *s*, and must fulfil 
+  *ofs* <= *matchofs* < *ofs*+*sizs*-*matchsize*. If no match was found,
+  its value is undefined.
 
+Every concrete Matcher type which uses the generic search methods implemented 
+in package Tokens require additionally the following properties:
 
- * a field (or property) *variant*::Int which is set if found>0. It contains an ID 
-   which identifies the pattern variant which matched. In the case of a Matcher which 
-   has multiple patterns, it is an index into the pattern list. 
-
-
-Every concrete Matcher type must have a property "found" which is set by a match call.
-found==0 indicates no match. found>0 gives the position of the match as an 1-based index.
-
-
+* a field (or property) *base*::BToken which gives the byte sequence 
+  in which the search took place. Its token category is irrelevant 
+  (not used in matcher methods)
 
 """
 abstract type Matcher 
@@ -150,7 +150,7 @@ function Base.match(r::Matcher, s::Utf8String, start::Int)
     ss = substring(s)
     @boundscheck checkbounds(ss,start)
     match(r,UInt32(start-1+ss.offset),usize(ss),ss.string)
-    r.found > 0 && (r.found -= offset(ss))
+    r.matchofs > 0 && (r.matchofs -= offset(ss))
     return r
 end
 
@@ -158,7 +158,7 @@ end
 function Base.match(r::Matcher, s::BToken, start::Int) 
     @boundscheck checkbounds(s,start:last)
     match(r,start-1+offset(s),usize(s),s.buffer)
-    r.found > 0 && (r.found -= offset(s))
+    r.matchofs > 0 && (r.matchofs -= offset(s))
     return r
 end
 
@@ -181,7 +181,8 @@ mutable struct ExactMatcher <: Matcher
   bloommask :: UInt64 # ORed byte hashes 
   lastskip :: Int # bytes to skip if last byte matches but another byte does not 
   bloomskip :: Int # bytes to skip if a byte-s hash is not in bloommask
-  found :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
+  matchofs :: UInt32 #  offset (0-based) in string buffer to search of last match
+  matchsize::UInt64 # 0 (not found) or number of bytes in match
   last :: UInt8 # last byte of pattern
   function ExactMatcher(pattern::AbstractString)
     matcher = new(string(pattern),0%UInt64,0,0,0,0x00)
@@ -247,20 +248,21 @@ end
 
 """
 function Base.match(matcher::ExactMatcher,ofs::UInt32,size::UInt64, s::String)
+    # TODO matchofs must be changed from index to offset, and matchsize must be set
     n = ncodeunits(matcher.pattern)
-    @boundscheck checkulimit(ofs+size,s)
+    @boundscheck checkrange(ofs,size,s)
     m = size%Int
-    matcher.found = 0 # assign default value "not found"
+    matcher.matchofs = 0 # assign default value "not found"
     if n<=1
         # special trivial case: switch to byte search or nothing to search
         if n==0
-            m>0 && (matcher.found = ofs+1)
+            m>0 && (matcher.matchofs = ofs+1)
         else
             # Base works like this: something(findnext(isequal(codeunit(e.last,1)), s, sfirst), 0)
             # let-s compare performance with an ordinary loop
             while sfirst <= slast
                 @inbounds if matcher.last == codeunit(s,sfirst)
-                    matcher.found = sfirst
+                    matcher.matchofs = sfirst
                 end
                 sfirst += 1
             end
@@ -283,7 +285,7 @@ function Base.match(matcher::ExactMatcher,ofs::UInt32,size::UInt64, s::String)
                         j += 1
                         # match found?
                         if j == n
-                            matcher.found = i-n+1
+                            matcher.matchofs = i-n+1
                             return matcher
                         end
                     end
@@ -303,12 +305,12 @@ function Base.match(matcher::ExactMatcher,ofs::UInt32,size::UInt64, s::String)
                 j = 1
                 while j <= n
                     if codeunit(s,i-n+j) != codeunit(t,j)
-                        break # not found
+                        break # not matchofs
                     end
                     j += 1
                 end
                 if j > n # means: loop without break , we have a match at the very end
-                    matcher.found = i-n+1
+                    matcher.matchofs = i-n+1
                 end 
            end
            # ###  END  ### of pattern matching loop
@@ -326,7 +328,8 @@ Search for any byte from a given list.
 mutable struct AnyByteMatcher <: Matcher
     pattern :: Vector{UInt8} # pattern matches any of its bytes
     ismatch ::  Vector{UInt8} # 0 or index into pattern. index is 1+(byte value to test)
-    found :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
+    matchofs :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
+    matchsize :: UInt64 # 0 or 1
     variant :: UInt32 # index into pattern for match
     function AnyByteMatcher(pattern::Vector{UInt8})
         ismatch =  Vector{UInt8}(0%UInt8,256)
@@ -338,18 +341,22 @@ mutable struct AnyByteMatcher <: Matcher
 end
 
 
-function Base.match(matcher::AnyByteMatcher,s::String, sfirst::Int, slast::Int)
-    @boundscheck checkbounds(s,sfirst:slast)
+#function Base.match(matcher::AnyByteMatcher,s::String, sfirst::Int, slast::Int)
+function Base.match(matcher::AnyByteMatcher,ofs::UInt32,size::UInt64, s::String)
+    @boundscheck checkrange(ofs,size,s)
     @inbounds begin
-        while sfirst <= slast
-            test = ismatch[codeunit(s,sfirst)]
+    endofs = ofs + (size%UInt32)
+        while ofs < endofs
+            test = ismatch[byte(s,ofs)]
             if test> 0
-                matcher.found = sfirst
+                matcher.matchofs = ofs
+                matcher.matchsize = 1
                 matcher.variant = test
                 return matcher
             end
+            sfirst += 1
         end
-        matcher.found = 0
+        matcher.matchsize = 0
         return matcher
     end
 end
@@ -358,65 +365,138 @@ end
 
 
 """
-Search for any string from a given list. 
+Match multiple patterns from a given list. 
 
-Works best with long strings to match (shortest length determines performance).
+For search, it works best with long patterns to match
+(shortest possible match length determines performance).
 
-Matcher uses a list of patterns, given as Token Vector. 
-Pattern processing depends on token category:
+Matcher uses a list of patterns, defined via a nonstandard string constant
+with prefix "rs". It is designed to be compatible with RegEx string constants,
+implementing a RegEx subset: the quantifiers *, + and {..} are not supported.
 
- * T_TEXT: pattern is an exact string match
-
- * T_CHAR: like T_TEXT, but pattern accepts lowercase and uppercase 
-   for every ASCII letter (does not apply to unicode letters beyond ASCII range)
-
- * T_LIST: for each byte position, a list of allowed byte values is specified. 
    
-   All byte values in the pattern are treatet as exact match, except '^' which acts as
-   escape for a nonexact match. UTF8 encoded non-ASCII characters are allowed and are treated as an exact match.
+   Most byte values in the pattern are treatet as exact match, with the following exceptions:
+   
+    * \\d any ASCII digit (0..9). 
+
+    * \\D any byte which is NOT an ASCII digit (0..9)
+
+    * \\w any ASCII word character (letter, digit, underscore).
+
+    * \\W any byte which is NOT an ASCII word character (letter, digit, underscore)
+
+    * \\w any ASCII word character (letter, digit, underscore).
+
+    * \\W any byte which is NOT an ASCII word character (letter, digit, underscore)
+
+    * \\s any white space byte: space, tab, newline, carriage return, vertical tab. With lexer: all continuations of raw category 16
+
+    * \\S any byte which is NOT a white space byte: space, tab, newline, carriage return, vertical tab
+
+    * \\r carriage return (0x13)
+
+    * \\n line feed (0x10)
+
+    * \\N neither \\r nor \\n
+
+    * \\c switches for subsequent byte definitions to case sensitive mode (default)
+
+    * \\C switches for subsequent byte definitions to case unsensitive mode for ascii letters
+
+    * \\ followed by any other byte: just that byte. 
+      Used to escape bytes which are otherwise interpreted as a command: \\ . * + [ ] ? ( ) { }
+
+    * * unsupported. Will cause a syntax error. In RegEx: preceding byte/group may appear 0 or more times 
     
-   The byte following a '^' specifies the type of match:
+    * + unsupported. Will cause a syntax error. In RegEx: preceding byte/group may appear 1 or more times
     
-   * ^x.. a byte value specified in hexadecimal notation with two ASCII hex characters, indicated by ..
-
-   * ^^ exact match for '^'
-
-    * ^? any byte value
-
-    * ^% any ASCII digit (0..9)
-
-    * ^&  any ASCII letter
+    * { unsupported. Will cause a syntax error. In RegEx: preceding byte/group may appear several times
     
-    * ^l any lower case ASCII letter
+    * . any byte
+        (ATTENTION: in contrast to many RegEx engines, linefeed bytes are accepted without lexer parameter.
+        Use \\N for any non-linefeed byte).
+
+    * [ ... ] matches one of the bytes defined in the list of byte definitions the brackets. All escapes above are allowed
+      
+    * [^...] any byte not in [...]
+
+    * [.-.] matches bytes of a range. range is given by two byte definitions separated by '-'
+      
+    * [^.-.] any byte not in [.-.]
+
+    * (...) a group definition. ... stands for a list of byte definitions.
+      It may contain any escapes and also groups, recursively.
+      The groups are numbered sequentially from left to right.
+      After a match, all group values in the match can be requested as strings. 
+      A group value is an empty string if the group does not exist in the match.
+      Example: the pattern "([a-z])([0-9])" matches "e5", 
+      group 1 value is then "e", group 2 value is "5". A group can be empty,
+      see treatment of alternatives below.
     
-    * ^u any upper case ASCII letter
+    * ? preceding byte or group specification is optional in the match.
+      Every ? is resolved by replacing the original pattern by two alternative
+      patterns, one with the optional byte/group, one without it.
+      In the latter, all groups are still there, but encoded as empty groups. 
+      Example: rs"((\\d)?\\d)" expands to two patterns, "((\\d)\\d)" and
+      "(()\\d)". Group 2 is empty if only one digit was matched.
+      
+      n occurrences of '?' will result in 2^n patterns. Be aware of the technical
+      limit in this implementation of up to 64 patterns.
+      
+    * | separates alternative (sub)patterns. Can be used on top level
+      or in groups.  Having m '|' in the pattern (or group) results in m+1 
+      alternative patterns. In each pattern, group index starts with the same value,
+      there are no empty groups automatically added as in alternatives defined by '?'.
+      If you want to distinguish groups coming from different alternatives, you must
+      add sufficient many empty groups at the beginning of each alternative.
 
-    * ^î any identifier ASCII character: letter or digit
+      m occurrences of '|' will result in m+1 patterns. This multiplies with the
+      alternative patterns resulting from '?'. Be aware of the technical
+      limit in this implementation of up to 64 alternative patterns after replacing
+      all constructs defined by '?' and '|'.
 
-    * ^r carriage return (^x0d)
+    * \\1 .. \\9 Reference to a pattern group (first 9 groups). 
+      In a replacement string, it will insert the group value in the match.
+      In a pattern, it will be replaced by the group definition 
+      (introducing an additional group), allowing re-use of lexer constructs. 
+      
+      A simple example for a date format: rs"(\\d?\\d)/\\1/\\1\\1" 
+      It matches "1/2/21" and "01/02/2021", but also "99/0/389". 
+      It expands to rs"(\\d?\\d)/(\\d?\\d)/(\\d?\\d)(\\d?\\d)", 
+      showing that we have four groups. In a match, group 1 and 2 contain month 
+      and day, group 3 and 4 concatenated give the year.
 
-    * ^n newline (^x0a)
+      It is possible to define a matcher which accepts only valid day and month
+      numbers, and only two and four digit year numbers: 
+      rs"((0?[123456789])|(1[012])):(\\2|([12]\\d)|(3[01])):(\\d\\d)?\\6". 
+      Carefully counting the groups, we find the month in group 1 and also group 2,
+      the day in group 3 and also in group 4, the complete year in group 5,
+      century (if matched) in group 6 and the last two year digits in group 7. 
 
-    * ^t tab (^x09)
-    
-    * ^b........ a byte value specified in binary notation with eight ASCII digits, indicated by .
-
-    * ^[list] list is an ASCII character list, non-ASCII bytes are specified by one of
-      the preceding escape notations 
-
-
-
-
+      There are still a few illegal day values accepted for months 
+      with fewer days than 31, like "04/31/2021". Covering those 
+      cases is possible, but requires different subpatterns for day 
+      depending on the month, and correctly matching only valid dates 
+      of the 29th of february is even dependent on the last two year digits. 
 """
 mutable struct AnyStringMatcher <: Matcher
     pattern :: Vector{UInt8} # pattern matches any of its bytes
     ismatch ::  Vector{UInt8} # 0 or index into pattern. index is 1+(byte value to test)
-    found :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
+    matchofs :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
     variant :: UInt32 # index into pattern for match
-    function AnyStringMatcher(pattern::BTokenVector)
-        error("not yet implemented")
+    function AnyStringMatcher(pattern)
+        println("pattern size: ",ncodeunits(pattern))
+        println("pattern: ",pattern)
+        error("not yet implemented.")
     end
 end
+
+
+macro rs_str(arg)
+    AnyStringMatcher(arg)
+end
+
+
 
 AnyStringMatcher(pattern::AbstractVector{T} ) where T <: AbstractString = AnyStringMatcher(BTokenVector(pattern))
 
@@ -427,14 +507,16 @@ function match(matcher::AnyStringMatcher,s::String, sfirst::Int, slast::Int )
         while sfirst <= slast
             test = ismatch[codeunit(s,sfirst)]
             if test> 0
-                matcher.found = sfirst
+                matcher.matchofs = sfirst
                 matcher.variant = test
                 return matcher
             end
         end
-        matcher.found = 0
+        matcher.matchofs = 0
         return matcher
     end
 end
 =#
+
+
 
