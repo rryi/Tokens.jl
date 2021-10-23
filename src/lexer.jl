@@ -32,12 +32,25 @@ lexer with mostly empty syntax: only category 0 is defined, all bytes belong to 
 no follower allowed. Add character categories with *addcategory*
 """
 struct ByteLexer <: AbstractLexer
-    io :: IOShared # lexer sets mark always to the begin of the current token.
-    syn:: Vector{UInt32} # structure defining byte and byte sequence categories for next(..) 
-    function ByteLexer(io :: IOShared)
-        new(io,Vector{UInt32}(zero(UInt32),256))
-    end
+    io :: IOShared # lexer methosa set mark always to the begin of the current raw token.
+    syn:: Vector{UInt32} # structure defining byte classes for lexer actions 
 end
+
+"""
+    ByteLexer(io::IOShared)
+
+Construct a lexer on *io* with empty syntax definition.
+Use [addcategory`](@ref) calls for setting up syntax definition. 
+"""
+ByteLexer(io::IOShared) = ByteLexer(io,Vector{UInt32}(zero(UInt32),256))
+
+
+"""
+    ByteLexer(io::IOShared, syn::AbstractLexer)
+
+Construct a lexer on *io* with the syntax definiton from *syn*. 
+"""
+ByteLexer(io::IOShared, syn::AbstractLexer) = ByteLexer(io,syn.syn)
 
 
 """
@@ -79,6 +92,22 @@ struct UnsafeLexer <: AbstractLexer
         new(io,Vector{UInt32}(zero(UInt32),256))
     end
 end
+
+"""
+    UnsafeLexer(io::IOShared)
+
+Construct a lexer on *io* with empty syntax definition.
+Use [addcategory`](@ref) calls for setting up syntax definition. 
+"""
+UnsafeLexer(io::IOShared) = UnsafeLexer(io,Vector{UInt32}(zero(UInt32),256))
+
+
+"""
+    UnsafeLexer(io::IOShared, syn::AbstractLexer)
+
+Construct a lexer on *io* with the syntax definiton from *syn*. 
+"""
+UnsafeLexer(io::IOShared, syn::UnsafeLexer) = UnsafeLexer(io,syn.syn)
 
 
 """

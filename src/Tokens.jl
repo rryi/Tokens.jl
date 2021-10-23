@@ -45,13 +45,15 @@ export fillup
 include("tokenvector.jl")
 export TokenVector
 include("match.jl")
-export initialize!, Matcher, ExactMatcher, AnyByteMatcher, AnyStringMatcher
-export @rs_str
+export initialize!, Matcher, ExactMatcher, AnyByteMatcher, RestrictedRegex
+export @rr_str
 
 #include("nibblevector.jl")
 
 include("lexer.jl")
 export AbstractLexer, ByteLexer, next, addcategory
 #export
+
+include("matchimpl.jl")
 
 end # module

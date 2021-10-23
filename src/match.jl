@@ -99,12 +99,19 @@ This holds for Base.AbstractString, and AbstractToken and IOShared of this modul
 Every concrete Matcher type must have the following properties:
 
 
-* a field (or property) *matchsize*::UInt64 which is set to the number of
-  bytes matched or 0 (no match).
+* a field (or property) *base*::BToken which gives the byte sequence 
+  in which the search took place. Its token category is irrelevant 
+  (not used in matcher methods). 
 
-* a field (or property) *matchofs*::UInt32 which is set by a match call.
-  It is the offset of the match within *s*, and must fulfil 
-  *ofs* <= *matchofs* < *ofs*+*sizs*-*matchsize*. If no match was found,
+  * a field (or property) *matchsize*::UInt64 which is set to the number of
+  bytes matched.
+
+
+* a field (or property) *matchidx*::UInt32 which is set by a match call.
+  If matching fails, it is set to 0. On match success,
+  it is the index of the match within the buffer of *base*, and must fulfil 
+  offset(*base*) < *matchidx* <= offset(*base*)+usize32(*base*). 
+  If no match was found, *matchidx* must be equal to offset(*base*)
   its value is undefined.
 
 Every concrete Matcher type which uses the generic search methods implemented 
@@ -140,7 +147,11 @@ end
 #[20] show(io::IO, re::Matcher)
 
 
-Base.match(r::Matcher, s) = match(r,s,firstindex(s))
+Base.match(r::Matcher, s) = match(r,BToken(s))
+
+Base.match(r::Matcher, s::BToken) = match(r,BToken(s))
+
+
 
 # no. horrible because makes a copy ...
 #Base.match(r::Matcher, s::AbstractString, start::Int) = match(r,string(s),start-firstindex(s)+1)
@@ -148,8 +159,8 @@ Base.match(r::Matcher, s) = match(r,s,firstindex(s))
 
 function Base.match(r::Matcher, s::Utf8String, start::Int) 
     ss = substring(s)
-    @boundscheck checkbounds(ss,start)
-    match(r,UInt32(start-1+ss.offset),usize(ss),ss.string)
+    @boundscheck checkbounds(s,start)
+    match(r,UInt32(start-1+offset(ss),usize(ss),ss.string))
     r.matchofs > 0 && (r.matchofs -= offset(ss))
     return r
 end
@@ -176,7 +187,7 @@ Algorithm is very similar to that used for string search in Julia Base.
 
 Little initialization overhead, very fast, but no pattern flexibility.
 """
-mutable struct ExactMatcher <: Matcher
+mutable struct BloomMatcher <: Matcher
   pattern :: String # pattern must match all bytes
   bloommask :: UInt64 # ORed byte hashes 
   lastskip :: Int # bytes to skip if last byte matches but another byte does not 
@@ -184,7 +195,7 @@ mutable struct ExactMatcher <: Matcher
   matchofs :: UInt32 #  offset (0-based) in string buffer to search of last match
   matchsize::UInt64 # 0 (not found) or number of bytes in match
   last :: UInt8 # last byte of pattern
-  function ExactMatcher(pattern::AbstractString)
+  function BloomMatcher(pattern::AbstractString)
     matcher = new(string(pattern),0%UInt64,0,0,0,0x00)
     initialize!(matcher)
     return matcher
@@ -194,8 +205,8 @@ end
 
 
 "can be used to re-initialize after assigning a new pattern"
-function initialize!(em::ExactMatcher)
-    p = em.pattern
+function initialize!(bm::BloomMatcher)
+    p = bm.pattern
     n = ncodeunits(p)
     # n <= 1 && error("ExactMatcher requires a pattern size of at least 2")
     skip = n
@@ -231,9 +242,9 @@ function initialize!(em::ExactMatcher)
         end
     end
     skip -= 1 # add 1 to skip in main loop
-    em.bloommask = bloom_mask
-    em.bloomskip = bloom_skip
-    em.lastskip = skip
+    bm.bloommask = bloom_mask
+    bm.bloomskip = bloom_skip
+    bm.lastskip = skip
 end
 
 
@@ -247,12 +258,12 @@ end
     boundscheck will ensure valid sfirst, slast are existing index values
 
 """
-function Base.match(matcher::ExactMatcher,ofs::UInt32,size::UInt64, s::String)
+function Base.match(matcher::BloomMatcher,ofs::UInt32,size::UInt64, s::String)
     # TODO matchofs must be changed from index to offset, and matchsize must be set
     n = ncodeunits(matcher.pattern)
     @boundscheck checkrange(ofs,size,s)
     m = size%Int
-    matcher.matchofs = 0 # assign default value "not found"
+    matcher.matchsize = 0 # assign default value "not found"
     if n<=1
         # special trivial case: switch to byte search or nothing to search
         if n==0
@@ -365,18 +376,45 @@ end
 
 
 """
-Match multiple patterns from a given list. 
+Restricted but fast RegEx matcher. 
 
-For search, it works best with long patterns to match
-(shortest possible match length determines performance).
+To achieve top search performance, it combines a Boyer-Moore alike 
+search which advances usually more than one position when no match
+was found, with parallelized pattern tests using set operations.
+It really boosts regex search performance for long, complicated 
+matches with lots of alternatives.
 
-Matcher uses a list of patterns, defined via a nonstandard string constant
-with prefix "rs". It is designed to be compatible with RegEx string constants,
+Matcher is constructed with an nonstandard string literal with
+prefix *rr*. It is designed to be compatible with RegEx string constants,
 implementing a RegEx subset: the quantifiers *, + and {..} are not supported.
 
+String literal options are
+
+    * i case insensitive matching (Ascii letters, only)
+
+    * x white space (CR, LF, blank, tab) in the pattern definition 
+      is ignored, and everything from a '#' until end of line is
+      skipped, allowing for comments.
+
+    * l use linux style end-of-line encoding: a single LF. 
+      Affects the definitions of \\N and \$, see below
+
+
+    * o use Apple OS style end-of-line encoding: a single CR. 
+      Affects the definitions of \\N and \$, see below
+
+    * w use windows style end-of-line encoding: a CR LF sequence
+      Affects the definitions of \\N and \$, see below
+
+ 
+Most byte values in the pattern are treatet as exact match, 
+with the following exceptions:
    
-   Most byte values in the pattern are treatet as exact match, with the following exceptions:
-   
+
+    * \\x.. a byte value in hexadecimal notation, .. denotes two hex digits
+      This is nonstandard for Regex implementations, but helpful if the 
+      matcher is working with binary patterns
+
     * \\d any ASCII digit (0..9). 
 
     * \\D any byte which is NOT an ASCII digit (0..9)
@@ -399,23 +437,34 @@ implementing a RegEx subset: the quantifiers *, + and {..} are not supported.
 
     * \\N neither \\r nor \\n
 
-    * \\c switches for subsequent byte definitions to case sensitive mode (default)
+    * \\i switches for subsequent byte definitions to case unsensitive mode.
+      Restriction: only ascii letters are covered, no further unicode letters.
 
-    * \\C switches for subsequent byte definitions to case unsensitive mode for ascii letters
+    * \\I switches for subsequent byte definitions to case sensitive mode.
+      This is the default, unless option 'i' is used.
+
+    * * unsupported. Will cause a syntax error. 
+      In Regex: preceding byte/group may appear 0 or more times 
+      Workaround: try with a fixed number of repetitions like {0-5}
+    
+    * + unsupported. Will cause a syntax error. 
+      In Regex: preceding byte/group may appear 1 or more times
+      Workaround: try with a fixed number of repetitions like {1-5}
+    
+    * ^ unsupported. Will cause a syntax error.
+      In Regex: matches begin of data/line, depending on the option'm' set or unset.
+
+    * \$ matches the end of line sequence, see options 'l', 'o', 'w'.
+      In Regex: matches end of data/line, depending on the option 'm' set or unset.
+          
+    * . any byte
+      In RegEx: same behavior, if option flag 's' is set.
+      To match any byte which is not part of the end of line sequence, use \\N
 
     * \\ followed by any other byte: just that byte. 
-      Used to escape bytes which are otherwise interpreted as a command: \\ . * + [ ] ? ( ) { }
-
-    * * unsupported. Will cause a syntax error. In RegEx: preceding byte/group may appear 0 or more times 
-    
-    * + unsupported. Will cause a syntax error. In RegEx: preceding byte/group may appear 1 or more times
-    
-    * { unsupported. Will cause a syntax error. In RegEx: preceding byte/group may appear several times
-    
-    * . any byte
-        (ATTENTION: in contrast to many RegEx engines, linefeed bytes are accepted without lexer parameter.
-        Use \\N for any non-linefeed byte).
-
+      Used to escape bytes which are otherwise interpreted as a command: 
+      \\ . * + [ ] ? ( ) { } ^ \$ 
+  
     * [ ... ] matches one of the bytes defined in the list of byte definitions the brackets. All escapes above are allowed
       
     * [^...] any byte not in [...]
@@ -424,26 +473,45 @@ implementing a RegEx subset: the quantifiers *, + and {..} are not supported.
       
     * [^.-.] any byte not in [.-.]
 
-    * (...) a group definition. ... stands for a list of byte definitions.
+    * (...) a group definition. ... denotes a list of byte definitions.
       It may contain any escapes and also groups, recursively.
       The groups are numbered sequentially from left to right.
-      After a match, all group values in the match can be requested as strings. 
-      A group value is an empty string if the group does not exist in the match.
+      After a match, all group values in the match can be requested as tokens. 
       Example: the pattern "([a-z])([0-9])" matches "e5", 
-      group 1 value is then "e", group 2 value is "5". A group can be empty,
-      see treatment of alternatives below.
+      group 1 value is then "e", group 2 value is "5". 
+
+      A group value can be the empty string if the group does not exist 
+      in the matching pattern alternative (but in other alternatives),
+      or if the group is defined to be empty. Empty groups are used in 
+      pattern alternatives, see following chapters for ? and |.
     
+    * \\1 .. \\9 Reference to a pattern group (first 9 groups). 
+      In a replacement string definition, it gets replaced by the group value.
+      In a pattern, it will be replaced by the group definition 
+      (introducing an additional group), allowing re-use of lexer constructs. 
+      
+  
     * ? preceding byte or group specification is optional in the match.
       Every ? is resolved by replacing the original pattern by two alternative
       patterns, one with the optional byte/group, one without it.
       In the latter, all groups are still there, but encoded as empty groups. 
-      Example: rs"((\\d)?\\d)" expands to two patterns, "((\\d)\\d)" and
-      "(()\\d)". Group 2 is empty if only one digit was matched.
+      Example: rr"((\\d)?\\d)" expands to two patterns, rr"((\\d)\\d)" and
+      rr"(()\\d)". Group 2 is empty if only one digit was matched.
       
       n occurrences of '?' will result in 2^n patterns. Be aware of the technical
-      limit in this implementation of up to 64 patterns.
-      
-    * | separates alternative (sub)patterns. Can be used on top level
+      limit in this implementation of up to 64 patterns. 
+    
+    * {n} results in repeating the preceding byte or group n times.
+    
+    * {n-m} results in repeating the preceding byte or group 
+      a variable number of times, from n up to m. {0-1} is equivalent to ?.
+
+      Processing is similar to ?: m-n+1 alternative patterns are created,
+      one for each number from n to m. And if a group with inner groups
+      is repeated, empty groups are added at the end of the repetitions,
+      so that all variants have the same number of inner groups.  
+        
+    * | separates alternative patterns. Can be used on top level
       or in groups.  Having m '|' in the pattern (or group) results in m+1 
       alternative patterns. In each pattern, group index starts with the same value,
       there are no empty groups automatically added as in alternatives defined by '?'.
@@ -455,45 +523,51 @@ implementing a RegEx subset: the quantifiers *, + and {..} are not supported.
       limit in this implementation of up to 64 alternative patterns after replacing
       all constructs defined by '?' and '|'.
 
-    * \\1 .. \\9 Reference to a pattern group (first 9 groups). 
-      In a replacement string, it will insert the group value in the match.
-      In a pattern, it will be replaced by the group definition 
-      (introducing an additional group), allowing re-use of lexer constructs. 
-      
-      A simple example for a date format: rs"(\\d?\\d)/\\1/\\1\\1" 
-      It matches "1/2/21" and "01/02/2021", but also "99/0/389". 
-      It expands to rs"(\\d?\\d)/(\\d?\\d)/(\\d?\\d)(\\d?\\d)", 
-      showing that we have four groups. In a match, group 1 and 2 contain month 
-      and day, group 3 and 4 concatenated give the year.
+    * {n} results in repeating the preceding byte or group n times.
+    
+    * {n-m} results in repeating the preceding byte or group 
+      a variable number of times, from n up to m. {0-1} is equivalent to ?.
 
-      It is possible to define a matcher which accepts only valid day and month
-      numbers, and only two and four digit year numbers: 
-      rs"((0?[123456789])|(1[012])):(\\2|([12]\\d)|(3[01])):(\\d\\d)?\\6". 
-      Carefully counting the groups, we find the month in group 1 and also group 2,
-      the day in group 3 and also in group 4, the complete year in group 5,
-      century (if matched) in group 6 and the last two year digits in group 7. 
+A simple example for a date format: rs"(\\d?\\d)/\\1/\\1\\1" 
+It matches "1/2/21" and "01/02/2021", but also "99/0/389". 
+It expands to rr"(\\d?\\d)/(\\d?\\d)/(\\d?\\d)(\\d?\\d)", 
+showing that we have four groups. In a match, group 1 and 2 contain month 
+and day, group 3 and 4 concatenated give the year.
 
-      There are still a few illegal day values accepted for months 
-      with fewer days than 31, like "04/31/2021". Covering those 
-      cases is possible, but requires different subpatterns for day 
-      depending on the month, and correctly matching only valid dates 
-      of the 29th of february is even dependent on the last two year digits. 
+It is possible to define a matcher which accepts only valid day and month
+numbers, and only two and four digit year numbers: 
+rr"((0?[123456789])|(1[012])):(\\2|([12]\\d)|(3[01])):(\\d\\d)?\\6". 
+Carefully counting the groups, we find the month in group 1 and also group 2,
+the day in group 3 and also in group 4, the complete year in group 5,
+century (if matched) in group 6 and the last two year digits in group 7. 
+
+There are still a few illegal day values accepted for months 
+with fewer days than 31, like "04/31/2021". Covering those 
+cases is possible, but requires different subpatterns for day 
+depending on the month, and correctly matching only valid dates 
+of the 29th of february is even dependent on the last two year digits. 
 """
-mutable struct AnyStringMatcher <: Matcher
+mutable struct RestrictedRegex <: Matcher
     pattern :: Vector{UInt8} # pattern matches any of its bytes
     ismatch ::  Vector{UInt8} # 0 or index into pattern. index is 1+(byte value to test)
     matchofs :: UInt32 #  index (1-based) in string to search of last match or 0 (no match found)
     variant :: UInt32 # index into pattern for match
-    function AnyStringMatcher(pattern)
-        println("pattern size: ",ncodeunits(pattern))
+    function RestrictedRegex(pattern,options)
+      println("pattern size: ",ncodeunits(pattern))
+      println("options: ",options)
+        
         println("pattern: ",pattern)
         error("not yet implemented.")
     end
 end
 
 
-macro rs_str(arg)
-    AnyStringMatcher(arg)
+# TODO RegEx der Datum, Zeit, Int, Real erkennt. Datum: ca 10 Varianten. Zeit: ca. 5 Varianten (mit/ohne Sekunden).
+# Zahlen bis 16 Ziffern, danach nix,. oder e/E => 48 Varianten. Parser danach muss selten int und immer real noch fertig parsen
+# ggf auch 10 digits und 5 nach Dezimalpunkt, dann werden auch die meisten reals erwischt.
+
+macro rr_str(arg,options)
+    RestrictedRegex(arg,options)
 end
 
 

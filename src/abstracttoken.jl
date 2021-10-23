@@ -109,10 +109,17 @@ abstract type AbstractToken <: AbstractString
 end
 
 
-"strings known to have codeunit type UInt8 and Utf8-Encoding"
+"""
+strings known to have codeunit type UInt8 and Utf8-Encoding.
+
+They support the AbstractString API and additionally 
+the methods [`usize`](@ref) and [`offset`](@ref)
+"""
 const Utf8String = Union{String,SubString{String},AbstractToken}
 
+offset(s::String) = 0
 
+offset(s::SubString) = s.offset
 
 #########################################################
 ################# AbstractToken API #####################
